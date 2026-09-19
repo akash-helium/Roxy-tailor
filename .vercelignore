@@ -1,0 +1,6 @@
+android
+release
+dist
+node_modules/.cache
+*.apk
+*.exe

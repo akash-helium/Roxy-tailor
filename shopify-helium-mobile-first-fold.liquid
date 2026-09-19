@@ -1,0 +1,1398 @@
+<script src="https://unpkg.com/embla-carousel/embla-carousel.umd.js"></script>
+
+{% liquid
+  assign current_variant = product.selected_or_first_available_variant
+  assign bg_image = product.metafields.custom.mobile_bg_image.value
+  assign theme_color = product.metafields.custom.theme_color.value
+  assign small_description = product.metafields.custom.small_description.value | default: product.metafields.custom.small_description
+  assign net_content = product.metafields.custom.net_content.value | default: product.metafields.custom.net_content
+  assign fomo_tag = product.metafields.custom.fomo_tag.value | default: product.metafields.custom.fomo_tag
+  assign fomo_gradient_start = section.settings.fomo_gradient_start | default: '#444444'
+  assign fomo_gradient_end = section.settings.fomo_gradient_end | default: '#000000'
+  assign fomo_text_color = section.settings.fomo_text_color | default: '#ffffff'
+
+  assign show_sold_out_metafield = product.metafields.custom.show_sold_out.value | default: product.metafields.custom.show_sold_out
+  assign force_sold_out = false
+  if show_sold_out_metafield == true or show_sold_out_metafield == 'true' or show_sold_out_metafield == 1
+    assign force_sold_out = true
+  endif
+
+  assign is_sold_out = false
+  if force_sold_out or current_variant.available == false
+    assign is_sold_out = true
+  endif
+
+  if product.metafields.custom.product_page_background_color.value != blank
+    assign helium_bg_color = product.metafields.custom.product_page_background_color.value
+  else
+    assign helium_bg_color = '#000000'
+  endif
+
+  if theme_color != blank
+    assign accent_color = theme_color
+  else
+    assign accent_color = '#e63919'
+  endif
+
+  assign main_image_sizes = '100vw'
+  assign notify_label = section.settings.text_back_in_stock | default: 'Notify me'
+%}
+
+<style>
+  :root {
+    --helium-bg: {{ helium_bg_color }};
+    --helium-accent: {{ accent_color }};
+    --helium-fomo-gradient-start: {{ fomo_gradient_start }};
+    --helium-fomo-gradient-end: {{ fomo_gradient_end }};
+    --helium-fomo-text-color: {{ fomo_text_color }};
+    --slide-spacing: {{ section.settings.slide_spacing | default: 12 }}px;
+  }
+
+  .helium-fold-wrapper {
+    display: block;
+    background-color: #000;
+    overflow-x: hidden;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    color: #fff;
+  }
+
+  @media (min-width: 769px) {
+    .helium-fold-wrapper { display: none !important; }
+  }
+
+  {% if bg_image != blank %}
+  .helium-fold-wrapper {
+    background-image: url('{{ bg_image | image_url: width: 2000 }}');
+    background-size: cover;
+    background-position: center top;
+    background-repeat: no-repeat;
+  }
+  {% endif %}
+
+  .hide { visibility: hidden; position: absolute; width: 0; height: 0; overflow: hidden; }
+
+  .helium-media-stage {
+    position: relative;
+    background: #000;
+    width: 100%;
+  }
+
+  .helium-header {
+    padding: 16px 20px 8px;
+    text-align: left;
+  }
+  .helium-header h1 {
+    font-size: 16px;
+    font-weight: 700;
+    margin: 0 0 4px;
+    color: #fff;
+  }
+  .helium-header p {
+    font-size: 13px;
+    margin: 0;
+    color: #aaa;
+  }
+
+  .embla--main { overflow: hidden; width: 100%; }
+  .embla--main .embla__container {
+    display: flex;
+    margin-left: 0;
+    padding-left: 0;
+    align-items: stretch;
+  }
+  .embla--main .embla__slide {
+    flex: 0 0 100%;
+    min-width: 0;
+    width: 100%;
+    max-width: 100%;
+    margin-right: var(--slide-spacing);
+    position: relative;
+  }
+  .embla--main .embla__slide:last-child {
+    margin-right: 0;
+  }
+  .helium-media-container {
+    width: 100%;
+    aspect-ratio: 4 / 5;
+    height: auto;
+    background: #000;
+    border-radius: 0;
+    overflow: hidden;
+    display: block;
+  }
+  .helium-media-container img,
+  .helium-media-container video,
+  .helium-media-container .helium-gallery-img {
+    width: 100%;
+    height: auto;
+    max-width: 100%;
+    max-height: none;
+    object-fit: cover;
+    object-position: center;
+    display: block;
+  }
+
+  .helium-carousel-progress {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    width: calc(100% - 32px);
+    max-width: 360px;
+    margin: 12px auto 16px;
+    height: 3px;
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .helium-carousel-progress__fill {
+    display: block;
+    height: 100%;
+    width: 28%;
+    min-width: 48px;
+    background: #fff;
+    border-radius: 2px;
+    transition: width 0.35s ease;
+  }
+
+  .embla--thumb { display: none; }
+
+  .helium-info-panel {
+    background: #000;
+    padding: 8px 20px 0px;
+    color: #fff;
+  }
+
+  .helium-fomo-strip {
+    margin: -8px -20px 20px;
+    padding: 8px 20px;
+    width: calc(100% + 40px);
+    background: linear-gradient(to right, var(--helium-fomo-gradient-start) 0%, var(--helium-fomo-gradient-end) 100%);
+    color: var(--helium-fomo-text-color);
+    font-family: 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace;
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1.35;
+    letter-spacing: 0.02em;
+    text-transform: none;
+  }
+
+  .helium-title-row h1 {
+    font-size: 24px;
+    font-weight: 700;
+    line-height: 1.15;
+    margin: 0 0 14px;
+    color: #fff;
+    text-transform: none;
+  }
+
+  .helium-rating-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 14px;
+    flex-wrap: wrap;
+  }
+  .helium-rating-stars {
+    display: inline-flex;
+    gap: 2px;
+    text-transform: none;
+    line-height: 1;
+  }
+  .helium-rating-stars .star {
+    color: #f5b301;
+    font-size: 16px;
+  }
+  .helium-rating-score {
+    font-size: 15px;
+    font-weight: 500;
+    color: #fff;
+    text-transform: none;
+  }
+  .helium-rating-divider { color: #666; font-weight: 300; }
+  .helium-reviews-count {
+    font-size: 14px;
+    font-weight: 400;
+    color: #fff;
+  }
+
+  .helium-small-description {
+    font-size: 14px;
+    font-weight: 400;
+    text-transform: none;
+    line-height: 1.45;
+    color: #a3a3a3;
+    margin: 0 0 12px;
+  }
+
+  .helium-net-content-text {
+    font-size: 14px;
+    text-transform: none;
+    color: #a3a3a3;
+    margin: 0 0 8px;
+  }
+  .helium-net-content-text strong {
+    color: #fff;
+    font-weight: 600;
+    text-transform: none;
+  }
+
+  .helium-price-row {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin: 0 0 6px;
+  }
+  .helium-current-price {
+    font-size: clamp(28px, 8vw, 34px);
+    font-weight: 700;
+    color: #fff;
+    line-height: 1;
+    text-transform: none;
+  }
+  .helium-discount-val {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--helium-accent);
+    line-height: 1;
+  }
+  .helium-mrp-row {
+    font-size: 14px;
+    color: #8a8a8a;
+    margin: 0 0 20px;
+  }
+  .helium-mrp-row strike { margin: 0 4px; }
+  .helium-tax-text {
+    font-style: normal;
+    opacity: 0.9;
+    text-transform: none;
+  }
+
+  .helium-usp-pills {
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    text-transform: none;
+    padding-bottom: 8px;
+    scrollbar-width: none;
+    margin-bottom: 16px;
+  }
+  .helium-usp-pills::-webkit-scrollbar { display: none; }
+  .helium-usp-pill {
+    background: #2a2a2a;
+    color: #fff;
+    padding: 8px 14px;
+    border-radius: 8px;
+    font-style: italic;
+    font-size: 13px;
+    white-space: nowrap;
+    border: 1px solid #333;
+  }
+
+  .m_product_quantity_with_to_cart_box {
+    display: flex;
+    align-items: stretch;
+    gap: 10px;
+    margin-top: 4px;
+    width: 100%;
+  }
+  .m_product_quantity_selector_box { width: 35%; flex: 0 0 35%; }
+  .m_product_quantity_selector_box .js-qty__wrapper,
+  .m_product_quantity_selector_box .quantity-selector {
+    border: 1px solid #333;
+    min-height: 50px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: #000;
+  }
+  .m_product_quantity_selector_box input {
+    text-align: center;
+    border: none;
+    width: 100%;
+    font-weight: 600;
+    font-size: 15px;
+    background: transparent;
+    color: #fff;
+  }
+  .m_main_product_add_to_cart { flex: 1; }
+  .m_main_product_add_to_cart button,
+  .m_main_product_add_to_cart .btn,
+  .product-block button[type='submit'] {
+    width: 100%;
+    min-height: 50px;
+    height: 100%;
+    background: var(--helium-accent) !important;
+    color: #fff !important;
+    border: none !important;
+    border-radius: 4px;
+    font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+
+  .helium-atc-sold-out,
+  .m_main_product_add_to_cart button.helium-atc-sold-out {
+    background: #2a2a2a !important;
+    color: #fff !important;
+    opacity: 1 !important;
+    cursor: not-allowed;
+  }
+
+  .helium-notify-btn {
+    width: 100%;
+    min-height: 50px;
+    background: #2a2a2a !important;
+    color: #ffffff !important;
+    border: 1px solid #3a3a3a !important;
+    border-radius: 4px;
+    font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    cursor: pointer;
+  }
+
+  .helium-notify-btn--full {
+    margin-top: 10px;
+  }
+
+  .helium-atc-row--sold-out .m_product_quantity_selector_box {
+    display: none;
+  }
+
+  .helium-atc-row--sold-out .m_main_product_add_to_cart {
+    flex: 1 1 100%;
+  }
+
+  .variant-input-wrap label {
+    background: #1a1a1a !important;
+    color: #fff !important;
+    border: 1px solid #333 !important;
+  }
+  .variant-input-wrap input[type=radio]:checked + label {
+    background: #333 !important;
+    border-color: #fff !important;
+  }
+
+  @keyframes helium-spin { to { transform: rotate(360deg); } }
+
+  .helium-loader {
+    width: 18px;
+    height: 18px;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    border-radius: 50%;
+    border-top-color: #fff;
+    display: inline-block;
+    animation: helium-spin 0.6s linear infinite;
+    vertical-align: middle;
+  }
+
+  .helium-btn-text.is-hidden { display: none; }
+  .helium-block-item { margin-bottom: 0; }
+
+  .helium-sticky-atc {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 99;
+    width: 100%;
+    background: #000;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  .helium-sticky-atc__btn {
+    display: flex;
+    width: 100%;
+    max-height: 48px;
+    margin: 0;
+    padding: 12px 0;
+    justify-content: center;
+    align-items: center;
+    border: none;
+    border-radius: 0;
+    background: var(--helium-accent);
+    color: #fff;
+    font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    text-align: center;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .helium-sticky-atc__btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+  .helium-sticky-atc__btn.helium-notify-btn {
+    background: #2a2a2a !important;
+    color: #ffffff !important;
+    border: none !important;
+    border-top: 1px solid #3a3a3a !important;
+    opacity: 1 !important;
+  }
+  .helium-sticky-atc__btn.helium-notify-btn:active {
+    background: #333333 !important;
+  }
+
+  modal-dialog.product-popup-modal-backinstock[open],
+  .product-popup-modal-backinstock[open] {
+    opacity: 1 !important;
+    visibility: visible !important;
+    z-index: 9999 !important;
+  }
+
+  .helium-product-form--hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+</style>
+
+<div
+  class="helium-fold-wrapper product-section m_product_template_variables_main_container"
+  id="ProductSection-{{ section.id }}-{{ product.id }}"
+  data-product-id="{{ product.id }}"
+  data-section-type="product"
+  data-product-handle="{{ product.handle }}"
+  data-force-sold-out="{{ force_sold_out }}"
+  data-is-sold-out="{{ is_sold_out }}"
+  data-notify-label="{{ notify_label | escape }}"
+  data-section-id="{{ section.id }}"
+  {% if section.settings.show_back_in_stock %}
+    data-notify-modal="#modal-back-in-stock-{{ section.id }}-mobile"
+  {% endif %}
+>
+  {%- render 'product-template-variables', product: product, current_variant: current_variant -%}
+
+  <div class="helium-wrapper">
+    <div class="helium-media-stage">
+      <div class="helium-header">
+        <h1>
+          {%- if section.settings.title != blank -%}
+            {{ section.settings.title }}
+          {%- endif -%}
+        </h1>
+        {%- if section.settings.subtitle != blank -%}
+          <p>{{ section.settings.subtitle }}</p>
+        {%- endif -%}
+      </div>
+
+      <div class="embla embla--main" id="embla-main-{{ section.id }}" data-product-photos>
+        <div class="embla__container">
+          {% assign asset_overrides = product.metafields.custom.asset_overrides.value %}
+          {% if asset_overrides != blank %}
+            {% for media in asset_overrides %}
+              <div class="embla__slide" data-media-id="{{ media.id }}">
+                <div class="helium-media-container">
+                  {% if media.media_type == 'video' %}
+                    {{ media | video_tag: autoplay: true, loop: true, muted: true, controls: false, playsinline: true, image_size: '2048x', class: 'helium-gallery-video' }}
+                  {% else %}
+                    {%- liquid
+                      assign override_sharp_image = media
+                      assign override_native_width = override_sharp_image.width | default: 0 | plus: 0
+                      if override_native_width == 0 and override_sharp_image.preview_image != blank
+                        assign override_native_width = override_sharp_image.preview_image.width | default: 0 | plus: 0
+                        if override_native_width > 0
+                          assign override_sharp_image = override_sharp_image.preview_image
+                        endif
+                      endif
+                      if override_native_width == 0
+                        assign override_native_width = 3840
+                      endif
+                      assign override_render_width = override_native_width | at_most: 3840
+                      assign override_render_width = override_render_width | at_least: 1200
+                    -%}
+                    {{
+                      override_sharp_image
+                      | image_url: width: override_render_width
+                      | image_tag:
+                        widths: '1200, 1500, 1800, 2100, 2400, 3000, 3840',
+                        sizes: main_image_sizes,
+                        loading: 'eager',
+                        fetchpriority: 'high',
+                        alt: media.alt,
+                        class: 'helium-gallery-img'
+                    }}
+                  {% endif %}
+                </div>
+              </div>
+            {% endfor %}
+          {% endif %}
+
+          {% if section.settings.video_url != blank %}
+            <div class="embla__slide" data-index="-1">
+              <div class="helium-media-container">
+                <video playsinline autoplay muted loop controls poster="{{ section.settings.video_poster | image_url: width: 1200 }}" class="helium-gallery-video" style="width:100%; height:100%; object-fit:cover;">
+                  <source src="{{ section.settings.video_url }}" type="video/mp4">
+                </video>
+              </div>
+            </div>
+          {% endif %}
+
+          {% for media in product.media %}
+            <div class="embla__slide" data-image-id="{{ media.id }}" data-media-id="{{ media.id }}">
+              <div class="helium-media-container">
+                {% liquid
+                  if forloop.first and section.settings.video_url == blank and asset_overrides == blank
+                    assign loading_strategy = 'eager'
+                    assign fetch_priority = 'high'
+                  else
+                    assign loading_strategy = 'lazy'
+                    assign fetch_priority = 'auto'
+                  endif
+
+                  assign slide_native_width = media.width | default: 0 | plus: 0
+                  if slide_native_width == 0 and media.preview_image != blank
+                    assign slide_native_width = media.preview_image.width | default: 0 | plus: 0
+                  endif
+                  if slide_native_width == 0
+                    assign slide_native_width = 3840
+                  endif
+                  assign slide_render_width = slide_native_width | at_most: 3840
+                  assign slide_render_width = slide_render_width | at_least: 1200
+                %}
+                {%- if media.media_type == 'video' -%}
+                  {{ media | video_tag: controls: false, autoplay: true, loop: true, muted: true, playsinline: true, image_size: '2048x', class: 'helium-gallery-video' }}
+                {%- elsif media.media_type == 'external_video' -%}
+                  {{ media | external_video_tag: class: 'helium-gallery-video' }}
+                {%- else -%}
+                  {{
+                    media
+                    | image_url: width: slide_render_width
+                    | image_tag:
+                      widths: '1200, 1500, 1800, 2100, 2400, 3000, 3840',
+                      sizes: main_image_sizes,
+                      loading: loading_strategy,
+                      fetchpriority: fetch_priority,
+                      alt: media.alt,
+                      class: 'helium-gallery-img'
+                  }}
+                {%- endif -%}
+              </div>
+            </div>
+          {% endfor %}
+        </div>
+      </div>
+
+      <div class="helium-carousel-progress" id="helium-progress-{{ section.id }}" aria-hidden="true">
+        <span class="helium-carousel-progress__fill"></span>
+      </div>
+    </div>
+
+    <div class="helium-info-panel">
+      {%- capture form_id -%}AddToCartForm-{{ section.id }}-{{ product.id }}{%- endcapture -%}
+
+      {%- form 'product', product, id: form_id, class: 'helium-product-form helium-product-form--hidden' -%}
+        <input type="hidden" name="id" value="{{ current_variant.id }}" class="helium-variant-id" data-helium-variant-id>
+        <input type="hidden" name="quantity" value="1" class="helium-quantity-hidden" data-helium-quantity>
+      {%- endform -%}
+
+      {%- for block in section.blocks -%}
+        <div class="helium-block-item" {{ block.shopify_attributes }}>
+          {%- case block.type -%}
+
+            {%- when 'title' -%}
+              {%- if fomo_tag != blank -%}
+                <div class="helium-fomo-strip" role="status">{{ fomo_tag }}</div>
+              {%- endif -%}
+              <div class="helium-title-row">
+                <h1>{{ product.title }}</h1>
+              </div>
+              {% if product.metafields.reviews.rating.value != blank %}
+                <div class="helium-rating-row">
+                  <span class="helium-rating-stars" aria-hidden="true">
+                    {%- for i in (1..5) -%}<span class="star">★</span>{%- endfor -%}
+                  </span>
+                  <span class="helium-rating-score">{{ product.metafields.reviews.rating.value.rating }}</span>
+                  <span class="helium-rating-divider">|</span>
+                  <span class="helium-reviews-count">{{ product.metafields.reviews.rating_count }} reviews</span>
+                </div>
+              {% endif %}
+              {% if small_description != blank %}
+                <p class="helium-small-description">{{ small_description }}</p>
+              {% endif %}
+              {% if section.settings.show_net_content and net_content != blank %}
+                <p class="helium-net-content-text">
+                  Net content: <strong>{{ net_content }}</strong>
+                </p>
+              {% endif %}
+
+            {%- when 'price' -%}
+              <div class="product-block">
+                <div class="helium-price-row">
+                  <span class="helium-current-price">{{ current_variant.price | money_without_trailing_zeros }}</span>
+                  {%- if current_variant.compare_at_price > current_variant.price -%}
+                    {%- assign savings = current_variant.compare_at_price | minus: current_variant.price | times: 100.0 | divided_by: current_variant.compare_at_price | round -%}
+                    <span class="helium-discount-val">{{ savings }}% Off</span>
+                  {%- endif -%}
+                </div>
+                <div class="helium-mrp-row">
+                  M.R.P.
+                  {%- if current_variant.compare_at_price > current_variant.price -%}
+                    <strike>{{ current_variant.compare_at_price | money_without_trailing_zeros }}</strike>
+                  {%- endif -%}
+                  <span class="helium-tax-text">Incl. of all taxes</span>
+                </div>
+              </div>
+
+            {%- when 'feature_tags' -%}
+              {%- if product.metafields.custom.feature_tags.value != blank -%}
+                <div class="helium-usp-pills">
+                  {% for tag in product.metafields.custom.feature_tags.value %}
+                    <div class="helium-usp-pill">{{ tag.text.value }}</div>
+                  {% endfor %}
+                </div>
+              {%- endif -%}
+
+            {%- when 'short_description' -%}
+              {%- if block.settings.content != blank and small_description == blank -%}
+                <p class="helium-small-description">{{ block.settings.content }}</p>
+              {%- endif -%}
+
+            {%- when 'atc_container' -%}
+              <div class="ss-main-product__variant-quantity-buy_btn-container{% if is_sold_out %} helium-atc-row--sold-out{% endif %}" style="--variant-cols: {{ block.settings.variants_per_row | default: 3 }};">
+                <div class="product-block m_product_variant_block_box">
+                  {%- unless product.has_only_default_variant -%}
+                    {%- for option in product.options_with_values -%}
+                      <div class="variant-wrapper js">
+                        <label class="variant__label" style="color:#888; font-size:13px; margin-bottom:8px; display:block;">{{ option.name }}</label>
+                        <fieldset class="variant-input-wrap" name="{{ option.name }}">
+                          {%- for value in option.values -%}
+                            <div class="variant-input">
+                              <input
+                                type="radio"
+                                form="{{ form_id }}"
+                                {% if option.selected_value == value %}checked{% endif %}
+                                value="{{ value | escape }}"
+                                name="{{ option.name }}"
+                                id="ProductSelect-{{ section.id }}-{{ product.id }}-option-{{ option.name | handleize }}-{{ value | url_encode }}"
+                              >
+                              <label for="ProductSelect-{{ section.id }}-{{ product.id }}-option-{{ option.name | handleize }}-{{ value | url_encode }}" class="variant__button-label">
+                                <span>{{ value | escape }}</span>
+                              </label>
+                            </div>
+                          {%- endfor -%}
+                        </fieldset>
+                      </div>
+                    {%- endfor -%}
+                  {%- endunless -%}
+                </div>
+
+                <div class="m_product_quantity_with_to_cart_box" data-helium-atc-box>
+                  {%- if is_sold_out -%}
+                    <div class="m_main_product_add_to_cart">
+                      <button type="button" class="helium-atc-sold-out" disabled>
+                        <span class="helium-btn-text">SOLD OUT</span>
+                      </button>
+                      {%- if section.settings.show_back_in_stock -%}
+                        <button
+                          type="button"
+                          class="helium-notify-btn helium-notify-btn--full"
+                          data-helium-notify-trigger
+                          aria-haspopup="dialog"
+                        >
+                          <span class="helium-btn-text">{{ notify_label | upcase }}</span>
+                        </button>
+                      {%- endif -%}
+                    </div>
+                  {%- else -%}
+                    <div class="m_product_quantity_selector_box">
+                      <div class="js-qty__wrapper">
+                        <input type="number" class="js-qty__num" value="1" min="1" form="{{ form_id }}" name="quantity">
+                      </div>
+                    </div>
+                    <div class="m_main_product_add_to_cart">
+                      <button type="submit" name="add" form="{{ form_id }}">
+                        <span class="helium-btn-text">ADD TO CART</span>
+                      </button>
+                    </div>
+                  {%- endif -%}
+                </div>
+              </div>
+
+            {%- when '@app' -%}
+              {% render block %}
+
+            {%- when 'banner' -%}
+              {% if block.settings.banner_video != blank %}
+                <div class="pdp__banner m_product_quantity_with_to_cart_box" style="margin-bottom:16px;">
+                  {{ block.settings.banner_video | video_tag: autoplay: true, loop: true, muted: true, controls: false }}
+                </div>
+              {% elsif block.settings.banner != blank %}
+                <div class="pdp__banner m_product_quantity_with_to_cart_box" style="margin-bottom:16px;">
+                  {{ block.settings.banner | image_url: width: 1000 | image_tag }}
+                </div>
+              {% endif %}
+
+            {%- when 'available_offers' -%}
+              {% render 'available-offers',
+                heading: block.settings.heading,
+                bg_color: block.settings.bg_color,
+                text_color: block.settings.text_color,
+                max_width: block.settings.max_width,
+                border_radius: block.settings.border_radius,
+                padding_left: block.settings.padding_left,
+                padding_right: block.settings.padding_right,
+                padding_y: block.settings.padding_y,
+                margin_top: block.settings.margin_top,
+                margin_bottom: block.settings.margin_bottom
+              %}
+
+            {%- when 'key_notes' -%}
+              {% render 'key-notes',
+                heading: block.settings.heading,
+                bg_color: block.settings.bg_color,
+                text_color: block.settings.text_color,
+                max_width: block.settings.max_width,
+                border_radius: block.settings.border_radius,
+                padding_left: block.settings.padding_left,
+                padding_right: block.settings.padding_right,
+                padding_y: block.settings.padding_y,
+                margin_top: block.settings.margin_top,
+                margin_bottom: block.settings.margin_bottom
+              %}
+
+            {%- when 'metaobject_accordion' -%}
+              {% render 'custom-metaobject-accordian',
+                open_first: block.settings.open_first,
+                padding_top: block.settings.padding_top,
+                padding_bottom: block.settings.padding_bottom,
+                border_radius: block.settings.border_radius,
+                item_spacing: block.settings.item_spacing,
+                inner_padding: block.settings.inner_padding,
+                bg_color: block.settings.bg_color,
+                item_bg_color: block.settings.item_bg_color,
+                title_color: block.settings.title_color,
+                text_color: block.settings.text_color,
+                max_width: block.settings.max_width
+              %}
+
+            {%- when 'creator_reels' -%}
+              {% render 'creator-reels',
+                heading: block.settings.heading,
+                max_width: block.settings.max_width,
+                padding_left: block.settings.padding_left,
+                padding_right: block.settings.padding_right,
+                margin_top: block.settings.margin_top,
+                margin_bottom: block.settings.margin_bottom
+              %}
+
+            {%- when 'image' -%}
+              {%- if block.settings.image != blank -%}
+                <div class="product__image" style="margin: 16px 0;">
+                  {{ block.settings.image | image_url: width: block.settings.image_width | default: 600 | image_tag: loading: 'lazy', alt: block.settings.image.alt }}
+                </div>
+              {%- endif -%}
+
+            {%- when 'product_lineup' -%}
+              {% if product.metafields.custom.lineup_product_1_name != blank %}
+                <div class="product-lineup__container" style="margin-bottom:16px;">
+                  <div class="product-lineup__heading" style="color:#fff; margin-bottom:8px;">{{ block.settings.product_lineup_heading }}</div>
+                  {% assign lineup_product_1 = product.metafields.custom.lineup_product_1_product.value %}
+                  {% if lineup_product_1 %}
+                    <product-lineup class="product-lineup__product-card" data-product-id="{{ lineup_product_1.id }}">
+                      <a href="{{ lineup_product_1.url }}">
+                        <img src="{{ lineup_product_1.featured_image | image_url: width: 200 }}" alt="{{ lineup_product_1.title }}" style="width:100%; height:auto;">
+                      </a>
+                      <a href="{{ lineup_product_1.url }}" style="color:#fff;"><span>{{ product.metafields.custom.lineup_product_1_name }}</span></a>
+                    </product-lineup>
+                  {% endif %}
+                </div>
+              {% endif %}
+
+            {%- endcase -%}
+        </div>
+      {%- endfor -%}
+    </div>
+  </div>
+
+  <textarea class="hide" data-variant-json aria-hidden="true">{{ product.variants | json }}</textarea>
+
+  {%- if section.settings.show_sticky_atc -%}
+    <div class="helium-sticky-atc" id="helium-sticky-atc-{{ section.id }}" data-helium-sticky-atc>
+      {%- if is_sold_out and section.settings.show_back_in_stock -%}
+        <button
+          type="button"
+          class="helium-sticky-atc__btn helium-notify-btn"
+          data-helium-notify-trigger
+          aria-haspopup="dialog"
+        >
+          <span class="helium-btn-text">{{ notify_label | upcase }}</span>
+        </button>
+      {%- elsif is_sold_out -%}
+        <button type="button" class="helium-sticky-atc__btn helium-atc-sold-out" disabled>
+          <span class="helium-btn-text">SOLD OUT</span>
+        </button>
+      {%- else -%}
+        <button
+          type="submit"
+          form="{{ form_id }}"
+          name="add"
+          class="helium-sticky-atc__btn"
+        >
+          <span class="helium-btn-text">ADD TO CART</span>
+        </button>
+      {%- endif -%}
+    </div>
+  {%- endif -%}
+</div>
+
+{%- render 'modal-back-in-stock', section: section, product: product, use_section_settings: true, google_sheets_url: section.settings.google_sheets_webhook_url -%}
+
+{%- if section.settings.show_back_in_stock -%}
+  <div class="visually-hidden" aria-hidden="true">
+    <modal-opener data-modal="#modal-back-in-stock-{{ section.id }}-mobile">
+      <button type="button" id="HeliumNotifyOpener-{{ section.id }}" data-helium-notify-opener tabindex="-1">
+        {{ notify_label }}
+      </button>
+    </modal-opener>
+  </div>
+{%- endif -%}
+
+<script src="{{ 'cart-drawer.js' | asset_url }}" defer="defer"></script>
+
+<script>
+  document.addEventListener('DOMContentLoaded', function () {
+    var mainNode = document.getElementById('embla-main-{{ section.id }}');
+    var progressBar = document.getElementById('helium-progress-{{ section.id }}');
+    if (!mainNode) return;
+
+    var slideCount = mainNode.querySelectorAll('.embla__slide').length;
+    if (slideCount < 2) {
+      if (progressBar) progressBar.style.display = 'none';
+      return;
+    }
+
+    var emblaMain = EmblaCarousel(mainNode, { loop: false, align: 'start', containScroll: 'trimSnaps' });
+
+    function sharpenGalleryImg(img) {
+      if (!img || !img.srcset) return;
+
+      var dpr = window.devicePixelRatio || 1;
+      var displayW = img.clientWidth || mainNode.clientWidth || window.innerWidth;
+      var neededW = Math.ceil(displayW * dpr);
+      var candidates = [];
+
+      img.srcset.split(',').forEach(function (part) {
+        var bits = part.trim().split(/\s+/);
+        var url = bits[0];
+        var w = parseInt((bits[1] || '0').replace('w', ''), 10) || 0;
+        if (url && w) candidates.push({ url: url, w: w });
+      });
+      if (!candidates.length) return;
+
+      candidates.sort(function (a, b) { return a.w - b.w; });
+
+      var pick = candidates[candidates.length - 1];
+      for (var i = 0; i < candidates.length; i++) {
+        if (candidates[i].w >= neededW) {
+          pick = candidates[i];
+          break;
+        }
+      }
+
+      if (pick.url && img.currentSrc !== pick.url) {
+        img.src = pick.url;
+        img.removeAttribute('srcset');
+        img.removeAttribute('sizes');
+      }
+    }
+
+    function sharpenVisibleSlides() {
+      var index = emblaMain.selectedScrollSnap();
+      var slides = mainNode.querySelectorAll('.embla__slide');
+      [index - 1, index, index + 1].forEach(function (i) {
+        if (i < 0 || i >= slides.length) return;
+        var img = slides[i].querySelector('.helium-gallery-img');
+        if (img) sharpenGalleryImg(img);
+      });
+    }
+
+    function updateProgress() {
+      if (!progressBar) return;
+      var fill = progressBar.querySelector('.helium-carousel-progress__fill');
+      var index = emblaMain.selectedScrollSnap();
+      var pct = slideCount > 1 ? ((index + 1) / slideCount) * 100 : 100;
+      fill.style.width = pct + '%';
+    }
+
+    emblaMain.on('select', function () {
+      updateProgress();
+      sharpenVisibleSlides();
+    });
+    emblaMain.on('reInit', function () {
+      updateProgress();
+      sharpenVisibleSlides();
+    });
+    updateProgress();
+    sharpenVisibleSlides();
+    mainNode.querySelectorAll('.helium-gallery-img').forEach(function (img) {
+      if (img.complete) {
+        sharpenGalleryImg(img);
+      } else {
+        img.addEventListener('load', function () { sharpenGalleryImg(img); }, { once: true });
+      }
+    });
+    window.addEventListener('resize', sharpenVisibleSlides);
+  });
+
+  (function () {
+    var formId = {{ form_id | json }};
+    var sectionRoot = document.getElementById('ProductSection-{{ section.id }}-{{ product.id }}');
+    if (!sectionRoot) return;
+
+    var productForm = document.getElementById(formId);
+    if (!productForm) return;
+
+    var notifyLabel = (sectionRoot.dataset.notifyLabel || 'Notify me').toUpperCase();
+    var showBackInStock = {{ section.settings.show_back_in_stock | default: true | json }};
+
+    function isForceSoldOut() {
+      return sectionRoot.dataset.forceSoldOut === 'true';
+    }
+
+    function getCartDrawer() {
+      return document.querySelector('cart-drawer');
+    }
+
+    function getSectionIds(cartDrawer) {
+      if (cartDrawer && typeof cartDrawer.getSectionsToRender === 'function') {
+        return cartDrawer
+          .getSectionsToRender()
+          .map(function (section) {
+            return section.id;
+          })
+          .join(',');
+      }
+      return 'cart-drawer,cart-icon-bubble';
+    }
+
+    function getSubmitButtons() {
+      return sectionRoot.querySelectorAll(
+        'button[type="submit"][form="' + formId + '"], button[name="add"][form="' + formId + '"]'
+      );
+    }
+
+    function syncQuantityToForm() {
+      var qtyInput = sectionRoot.querySelector('input.js-qty__num[form="' + formId + '"]');
+      var qtyHidden = sectionRoot.querySelector('[data-helium-quantity]');
+      if (qtyInput && qtyHidden) {
+        qtyHidden.value = qtyInput.value || '1';
+      }
+    }
+
+    function openNotifyModal(triggerEl) {
+      var notifyModalSelector = sectionRoot.dataset.notifyModal || '';
+
+      var modal = notifyModalSelector ? document.querySelector(notifyModalSelector) : null;
+      if (!modal) {
+        modal = sectionRoot.querySelector('modal-dialog[id*="modal-back-in-stock"]');
+      }
+
+      if (modal && typeof modal.show === 'function') {
+        modal.show(triggerEl || null);
+        return;
+      }
+
+      var openerBtn =
+        sectionRoot.querySelector('[data-helium-notify-opener]') ||
+        sectionRoot.querySelector('modal-opener[data-modal*="back-in-stock"] button');
+
+      if (openerBtn) {
+        openerBtn.click();
+        return;
+      }
+
+      var desktopSection = document.querySelector('[id^="MainProduct-"]');
+      var desktopModalSelector = desktopSection && desktopSection.dataset ? desktopSection.dataset.notifyModal : '';
+      modal = desktopModalSelector ? document.querySelector(desktopModalSelector) : null;
+
+      if (!modal) {
+        modal = document.querySelector('modal-dialog[id*="modal-back-in-stock"]');
+      }
+
+      if (modal && typeof modal.show === 'function') {
+        modal.show(triggerEl || null);
+        return;
+      }
+
+      var desktopOpener =
+        document.querySelector('[id^="sold-out-message-"] .product-popup-modal__button') ||
+        document.querySelector('modal-opener[data-modal*="back-in-stock"] button');
+
+      if (desktopOpener) {
+        desktopOpener.click();
+      }
+    }
+
+    sectionRoot.addEventListener('click', function (event) {
+      var notifyTrigger = event.target.closest('[data-helium-notify-trigger]');
+      if (notifyTrigger) {
+        event.preventDefault();
+        openNotifyModal(notifyTrigger);
+      }
+    });
+
+    function showLoader() {
+      getSubmitButtons().forEach(function (btn) {
+        btn.dataset.heliumPrevDisabled = btn.disabled ? '1' : '0';
+        btn.disabled = true;
+        var text = btn.querySelector('.helium-btn-text');
+        if (!text) {
+          text = document.createElement('span');
+          text.className = 'helium-btn-text';
+          text.textContent = btn.textContent.trim();
+          btn.textContent = '';
+          btn.appendChild(text);
+        }
+        text.classList.add('is-hidden');
+        if (!btn.querySelector('.helium-loader')) {
+          var loader = document.createElement('div');
+          loader.className = 'helium-loader';
+          btn.appendChild(loader);
+        }
+      });
+    }
+
+    function hideLoader() {
+      getSubmitButtons().forEach(function (btn) {
+        btn.disabled = btn.dataset.heliumPrevDisabled === '1';
+        delete btn.dataset.heliumPrevDisabled;
+        var loader = btn.querySelector('.helium-loader');
+        if (loader) loader.remove();
+        var text = btn.querySelector('.helium-btn-text');
+        if (text) text.classList.remove('is-hidden');
+      });
+    }
+
+    function buildFormData() {
+      syncQuantityToForm();
+      var cartDrawer = getCartDrawer();
+      var formData = new FormData(productForm);
+      formData.set('sections', getSectionIds(cartDrawer));
+      formData.set('sections_url', window.location.pathname);
+      return formData;
+    }
+
+    function renderCartDrawer(data) {
+      var cartDrawer = getCartDrawer();
+      if (!cartDrawer) return;
+
+      cartDrawer.classList.remove('is-empty');
+
+      if (typeof cartDrawer.renderContents === 'function') {
+        cartDrawer.renderContents(data);
+        return;
+      }
+
+      if (typeof cartDrawer.open === 'function') {
+        cartDrawer.open();
+      } else {
+        cartDrawer.classList.add('active', 'animate', 'is-open');
+        document.body.classList.add('overflow-hidden');
+      }
+    }
+
+    function onSubmit(event) {
+      if (isForceSoldOut() || sectionRoot.dataset.isSoldOut === 'true') {
+        event.preventDefault();
+        return;
+      }
+      if (event.defaultPrevented) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+
+      showLoader();
+
+      var cartAddUrl =
+        window.Shopify && window.Shopify.routes && window.Shopify.routes.root
+          ? window.Shopify.routes.root + 'cart/add.js'
+          : '/cart/add.js';
+
+      fetch(cartAddUrl, {
+        method: 'POST',
+        headers: { 'X-Requested-With': 'XMLHttpRequest' },
+        body: buildFormData(),
+      })
+        .then(function (response) {
+          return response.json();
+        })
+        .then(function (data) {
+          if (data.status) {
+            throw new Error(data.description || data.message || 'Could not add to cart');
+          }
+
+          document.dispatchEvent(
+            new CustomEvent('cart:updated', { bubbles: true, detail: { cart: data } })
+          );
+          renderCartDrawer(data);
+        })
+        .catch(function (error) {
+          console.error(error);
+        })
+        .finally(hideLoader);
+    }
+
+    function bindCartForm() {
+      productForm.addEventListener('submit', onSubmit, true);
+    }
+
+    function bindQtyInput() {
+      var qtyInput = sectionRoot.querySelector('input.js-qty__num[form="' + formId + '"]');
+      if (!qtyInput) return;
+      qtyInput.addEventListener('change', syncQuantityToForm);
+      qtyInput.addEventListener('input', syncQuantityToForm);
+    }
+
+    function updateAtcSoldOutState(soldOut) {
+      var box = sectionRoot.querySelector('[data-helium-atc-box]');
+      var container = sectionRoot.querySelector('.ss-main-product__variant-quantity-buy_btn-container');
+      var stickyAtc = sectionRoot.querySelector('[data-helium-sticky-atc]');
+
+      sectionRoot.dataset.isSoldOut = soldOut ? 'true' : 'false';
+
+      if (container) {
+        container.classList.toggle('helium-atc-row--sold-out', soldOut);
+      }
+
+      if (box) {
+        if (soldOut) {
+          box.innerHTML =
+            '<div class="m_main_product_add_to_cart">' +
+              '<button type="button" class="helium-atc-sold-out" disabled><span class="helium-btn-text">SOLD OUT</span></button>' +
+              (showBackInStock
+                ? '<button type="button" class="helium-notify-btn helium-notify-btn--full" data-helium-notify-trigger aria-haspopup="dialog"><span class="helium-btn-text">' + notifyLabel + '</span></button>'
+                : '') +
+            '</div>';
+        } else {
+          box.innerHTML =
+            '<div class="m_product_quantity_selector_box">' +
+              '<div class="js-qty__wrapper">' +
+                '<input type="number" class="js-qty__num" value="1" min="1" form="' + formId + '" name="quantity">' +
+              '</div>' +
+            '</div>' +
+            '<div class="m_main_product_add_to_cart">' +
+              '<button type="submit" name="add" form="' + formId + '"><span class="helium-btn-text">ADD TO CART</span></button>' +
+            '</div>';
+          bindQtyInput();
+        }
+      }
+
+      if (stickyAtc) {
+        if (soldOut && showBackInStock) {
+          stickyAtc.innerHTML =
+            '<button type="button" class="helium-sticky-atc__btn helium-notify-btn" data-helium-notify-trigger aria-haspopup="dialog">' +
+              '<span class="helium-btn-text">' + notifyLabel + '</span>' +
+            '</button>';
+        } else if (soldOut) {
+          stickyAtc.innerHTML =
+            '<button type="button" class="helium-sticky-atc__btn helium-atc-sold-out" disabled>' +
+              '<span class="helium-btn-text">SOLD OUT</span>' +
+            '</button>';
+        } else {
+          stickyAtc.innerHTML =
+            '<button type="submit" form="' + formId + '" name="add" class="helium-sticky-atc__btn">' +
+              '<span class="helium-btn-text">ADD TO CART</span>' +
+            '</button>';
+        }
+      }
+    }
+
+    if (customElements.get('cart-drawer')) {
+      bindCartForm();
+    } else {
+      customElements.whenDefined('cart-drawer').then(bindCartForm).catch(bindCartForm);
+    }
+
+    bindQtyInput();
+
+    setTimeout(function () {
+      var variantDataTag = sectionRoot.querySelector('[data-variant-json]');
+      if (!variantDataTag || !window.Shopify) return;
+      var productVariants = JSON.parse(variantDataTag.textContent);
+
+      function updateVariantUI(variant) {
+        if (!variant) return;
+
+        var soldOut = isForceSoldOut() || !variant.available;
+        var priceEl = sectionRoot.querySelector('.helium-current-price');
+        var strikeEl = sectionRoot.querySelector('.helium-mrp-row strike');
+        var discountEl = sectionRoot.querySelector('.helium-discount-val');
+        var variantIdInput = sectionRoot.querySelector('[data-helium-variant-id]');
+
+        if (priceEl) priceEl.innerText = Shopify.formatMoney(variant.price, {{ shop.money_format | json }});
+        if (variantIdInput) variantIdInput.value = variant.id;
+
+        updateAtcSoldOutState(soldOut);
+
+        if (strikeEl && variant.compare_at_price > variant.price) {
+          strikeEl.innerText = Shopify.formatMoney(variant.compare_at_price, {{ shop.money_format | json }});
+          if (discountEl) {
+            var savings = Math.round((variant.compare_at_price - variant.price) * 100 / variant.compare_at_price);
+            discountEl.innerText = savings + '% Off';
+          }
+        } else if (strikeEl) {
+          strikeEl.innerText = '';
+          if (discountEl) discountEl.innerText = '';
+        }
+      }
+
+      sectionRoot.querySelectorAll('.m_product_variant_block_box .variant-input-wrap input').forEach(function (input) {
+        input.addEventListener('change', function () {
+          var selected = [];
+          sectionRoot.querySelectorAll('.m_product_variant_block_box .variant-input-wrap input:checked').forEach(function (checked) {
+            selected.push(checked.value);
+          });
+          var matched = productVariants.find(function (v) {
+            return v.options.every(function (val, i) {
+              return val === selected[i];
+            });
+          });
+          if (matched) updateVariantUI(matched);
+        });
+      });
+    }, 800);
+  })();
+
+  (function () {
+    if (window.innerWidth >= 769) {
+      var el = document.querySelector('.helium-fold-wrapper');
+      if (el) {
+        var section = el.closest('.shopify-section');
+        if (section) section.remove();
+      }
+    }
+  })();
+</script>
+
+{% schema %}
+{
+  "name": "Helium Mobile First Fold",
+  "settings": [
+    { "type": "header", "content": "FOMO tag strip" },
+    { "type": "paragraph", "content": "Displays product metafield custom.fomo_tag above the product title." },
+    { "type": "color", "id": "fomo_gradient_start", "label": "Gradient start", "default": "#444444" },
+    { "type": "color", "id": "fomo_gradient_end", "label": "Gradient end", "default": "#000000" },
+    { "type": "color", "id": "fomo_text_color", "label": "Text color", "default": "#ffffff" },
+    { "type": "color", "id": "bg_color", "label": "Background Color (fallback)", "default": "#000000" },
+    { "type": "color", "id": "text_color", "label": "Text Color", "default": "#ffffff" },
+    { "type": "checkbox", "id": "show_net_content", "label": "Show net content", "default": true },
+    { "type": "checkbox", "id": "show_back_in_stock", "label": "Show notify me when sold out", "default": true },
+    { "type": "text", "id": "text_back_in_stock", "label": "Notify button text", "default": "Notify me" },
+    { "type": "text", "id": "google_sheets_webhook_url", "label": "Google Sheets webhook URL", "default": "https://script.google.com/a/macros/gethelium.co/s/AKfycbyCVjoRYajHlpRtjSAnPB67DNxWkwcgOQrA5uxcZKdvpTa9L6Tipc2xu03lvPf72Hc/exec", "info": "Google Apps Script web app URL. Submissions save to your Google Sheet." },
+    { "type": "range", "id": "slide_spacing", "min": 0, "max": 24, "step": 2, "unit": "px", "label": "Slide spacing", "default": 0 },
+    { "type": "text", "id": "title", "label": "Header Title (optional)" },
+    { "type": "text", "id": "subtitle", "label": "Header Subtitle (optional)" },
+    { "type": "text", "id": "video_url", "label": "Video URL (MP4)" },
+    { "type": "image_picker", "id": "video_poster", "label": "Video Poster" },
+    { "type": "checkbox", "id": "show_sticky_atc", "label": "Show fixed bottom Add to Cart", "default": true }
+  ],
+  "blocks": [
+    {
+      "type": "title",
+      "name": "Title",
+      "limit": 1,
+      "settings": [
+        {
+          "type": "paragraph",
+          "content": "Uses metafields: custom.small_description, custom.net_content, custom.fomo_tag, custom.show_sold_out"
+        }
+      ]
+    },
+    { "type": "price", "name": "Price" },
+    { "type": "feature_tags", "name": "Feature Tags" },
+    { "type": "short_description", "name": "Short Description", "settings": [
+      { "type": "text", "id": "short_desc_heading", "label": "Heading" },
+      { "type": "richtext", "id": "content", "label": "Content" }
+    ]},
+    { "type": "atc_container", "name": "Add To Cart", "settings": [
+      { "type": "range", "id": "variants_per_row", "min": 1, "max": 4, "default": 3, "label": "Variants per row" }
+    ]},
+    { "type": "@app" },
+    { "type": "banner", "name": "Banner", "settings": [
+      { "type": "image_picker", "id": "banner", "label": "Banner Image" },
+      { "type": "video", "id": "banner_video", "label": "Banner Video" }
+    ]},
+    { "type": "available_offers", "name": "Available Offers", "limit": 1, "settings": [
+      { "type": "text", "id": "heading", "label": "Heading", "default": "AVAILABLE OFFERS" },
+      { "type": "color", "id": "bg_color", "label": "Background", "default": "#050505" },
+      { "type": "color", "id": "text_color", "label": "Text", "default": "#ffffff" },
+      { "type": "range", "id": "max_width", "min": 400, "max": 1200, "step": 20, "unit": "px", "label": "Max Width", "default": 600 },
+      { "type": "range", "id": "border_radius", "min": 0, "max": 20, "step": 2, "unit": "px", "label": "Corner Radius", "default": 20 },
+      { "type": "range", "id": "padding_left", "min": 0, "max": 100, "step": 5, "unit": "px", "label": "Left Padding", "default": 20 },
+      { "type": "range", "id": "padding_right", "min": 0, "max": 100, "step": 5, "unit": "px", "label": "Right Padding", "default": 20 },
+      { "type": "range", "id": "padding_y", "min": 0, "max": 100, "step": 5, "unit": "px", "label": "Vertical Padding", "default": 30 },
+      { "type": "range", "id": "margin_top", "min": 0, "max": 100, "step": 5, "unit": "px", "label": "Top Margin", "default": 40 },
+      { "type": "range", "id": "margin_bottom", "min": 0, "max": 100, "step": 5, "unit": "px", "label": "Bottom Margin", "default": 40 }
+    ]},
+    { "type": "key_notes", "name": "Key Notes", "limit": 1, "settings": [
+      { "type": "text", "id": "heading", "label": "Heading", "default": "KEY NOTES" },
+      { "type": "color", "id": "bg_color", "label": "Background", "default": "#050505" },
+      { "type": "color", "id": "text_color", "label": "Text", "default": "#ffffff" },
+      { "type": "range", "id": "max_width", "min": 400, "max": 1200, "step": 20, "unit": "px", "label": "Max Width", "default": 600 },
+      { "type": "range", "id": "border_radius", "min": 0, "max": 20, "step": 2, "unit": "px", "label": "Corner Radius", "default": 20 },
+      { "type": "range", "id": "padding_left", "min": 0, "max": 100, "step": 5, "unit": "px", "label": "Left Padding", "default": 20 },
+      { "type": "range", "id": "padding_right", "min": 0, "max": 100, "step": 5, "unit": "px", "label": "Right Padding", "default": 20 },
+      { "type": "range", "id": "padding_y", "min": 0, "max": 100, "step": 5, "unit": "px", "label": "Vertical Padding", "default": 30 },
+      { "type": "range", "id": "margin_top", "min": 0, "max": 100, "step": 5, "unit": "px", "label": "Top Margin", "default": 40 },
+      { "type": "range", "id": "margin_bottom", "min": 0, "max": 100, "step": 5, "unit": "px", "label": "Bottom Margin", "default": 40 }
+    ]},
+    { "type": "metaobject_accordion", "name": "Metaobject Accordion", "limit": 1, "settings": [
+      { "type": "paragraph", "content": "Uses metafield: custom.product_accordians" },
+      { "type": "checkbox", "id": "open_first", "label": "Open first by default", "default": true },
+      { "type": "range", "id": "padding_top", "min": 0, "max": 100, "step": 5, "unit": "px", "label": "Padding Top", "default": 20 },
+      { "type": "range", "id": "padding_bottom", "min": 0, "max": 100, "step": 5, "unit": "px", "label": "Padding Bottom", "default": 20 },
+      { "type": "range", "id": "border_radius", "min": 0, "max": 20, "step": 2, "unit": "px", "label": "Border Radius", "default": 0 },
+      { "type": "range", "id": "item_spacing", "min": 0, "max": 40, "step": 2, "unit": "px", "label": "Gap Between Items", "default": 0 },
+      { "type": "range", "id": "inner_padding", "min": 0, "max": 40, "step": 2, "unit": "px", "label": "Inner Padding", "default": 0 },
+      { "type": "color", "id": "bg_color", "label": "Section Background", "default": "#000000" },
+      { "type": "color", "id": "item_bg_color", "label": "Item Background", "default": "transparent" },
+      { "type": "color", "id": "title_color", "label": "Title Color", "default": "#ffffff" },
+      { "type": "color", "id": "text_color", "label": "Body Text Color", "default": "#b3b3b3" },
+      { "type": "range", "id": "max_width", "min": 400, "max": 1200, "step": 50, "unit": "px", "label": "Max Width", "default": 800 }
+    ]},
+    { "type": "creator_reels", "name": "Creator Reels", "limit": 1, "settings": [
+      { "type": "text", "id": "heading", "label": "Heading" },
+      { "type": "range", "id": "max_width", "min": 400, "max": 1200, "step": 20, "unit": "px", "label": "Max Width", "default": 600 },
+      { "type": "range", "id": "padding_left", "min": 0, "max": 100, "step": 5, "unit": "px", "label": "Left Padding", "default": 20 },
+      { "type": "range", "id": "padding_right", "min": 0, "max": 100, "step": 5, "unit": "px", "label": "Right Padding", "default": 20 },
+      { "type": "range", "id": "margin_top", "min": 0, "max": 100, "step": 5, "unit": "px", "label": "Top Margin", "default": 40 },
+      { "type": "range", "id": "margin_bottom", "min": 0, "max": 100, "step": 5, "unit": "px", "label": "Bottom Margin", "default": 40 }
+    ]},
+    { "type": "product_lineup", "name": "Product Lineup", "settings": [
+      { "type": "text", "id": "product_lineup_heading", "label": "Heading", "default": "Product Lineup" },
+      { "type": "select", "id": "design", "label": "Design", "options": [
+        { "value": "design-1", "label": "Design 1" },
+        { "value": "design-2", "label": "Design 2" }
+      ], "default": "design-1" }
+    ]},
+    { "type": "image", "name": "Image", "settings": [
+      { "type": "image_picker", "id": "image", "label": "Image" },
+      { "type": "range", "id": "image_width", "min": 20, "max": 100, "step": 1, "unit": "%", "label": "Image width", "default": 100 }
+    ]}
+  ],
+  "presets": [
+    {
+      "name": "Helium Mobile First Fold",
+      "blocks": [
+        { "type": "title" },
+        { "type": "price" },
+        { "type": "feature_tags" },
+        { "type": "atc_container" }
+      ]
+    }
+  ]
+}
+{% endschema %}

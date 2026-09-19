@@ -1,0 +1,135 @@
+{
+  "name": "progress-app",
+  "private": true,
+  "version": "1.3.37",
+  "type": "module",
+  "main": "electron-main.cjs",
+  "scripts": {
+    "dev": "vite",
+    "dev:admin": "vite --config admin/vite.config.ts",
+    "dev:desktop": "concurrently -k \"vite --port 5180 --strictPort\" \"wait-on tcp:5180 && cross-env DESKTOP_DEV_PORT=5180 electron .\"",
+    "build": "tsc -b && vite build",
+    "build:admin": "tsc -p admin/tsconfig.json && vite build --config admin/vite.config.ts",
+    "build:desktop": "cross-env ELECTRON=1 tsc -b && cross-env ELECTRON=1 vite build && electron-builder",
+    "build:win": "cross-env ELECTRON=1 tsc -b && cross-env ELECTRON=1 vite build && bunx electron-builder --win --x64 --arm64 && node scripts/copy-release-win.mjs",
+    "build:apk": "bun run build && bunx cap sync android && cd android && ./gradlew assembleRelease && cd .. && node scripts/copy-release-apk.mjs",
+    "build:android": "bun run build:apk",
+    "build:android:debug": "bun run build && bunx cap sync android && cd android && ./gradlew assembleDebug && cd .. && node scripts/copy-release-apk.mjs --debug",
+    "deploy:android": "node scripts/deploy-android.mjs",
+    "lint": "eslint .",
+    "preview": "vite preview",
+    "preview:admin": "vite preview --config admin/vite.config.ts",
+    "setup:user": "node scripts/setup-default-user.mjs"
+  },
+  "dependencies": {
+    "@capacitor/app": "^8.1.0",
+    "@capacitor/camera": "^8.2.0",
+    "@capacitor/cli": "^8.3.4",
+    "@capacitor/core": "^8.3.4",
+    "@capacitor/filesystem": "^8.1.2",
+    "@capacitor/share": "^8.0.1",
+    "@supabase/supabase-js": "^2.106.2",
+    "clsx": "^2.1.1",
+    "html5-qrcode": "^2.3.8",
+    "jsbarcode": "^3.12.3",
+    "lucide-react": "^1.16.0",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
+    "react-router-dom": "^7.15.1",
+    "tailwind-merge": "^3.6.0",
+    "tslib": "^2.8.1"
+  },
+  "devDependencies": {
+    "@capacitor/android": "^8.3.4",
+    "@eslint/js": "^10.0.1",
+    "@tailwindcss/vite": "^4.3.0",
+    "@types/node": "^24.12.3",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.1",
+    "concurrently": "^10.0.3",
+    "cross-env": "^10.1.0",
+    "electron": "33.4.11",
+    "electron-builder": "^26.15.3",
+    "eslint": "^10.3.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.2",
+    "globals": "^17.6.0",
+    "png-to-ico": "^3.0.2",
+    "tailwindcss": "^4.3.0",
+    "typescript": "~6.0.2",
+    "typescript-eslint": "^8.59.2",
+    "vite": "^8.0.12",
+    "wait-on": "^9.0.10"
+  },
+  "build": {
+    "appId": "com.tailor.app",
+    "productName": "Roxy Tailor",
+    "directories": {
+      "output": "release"
+    },
+    "asar": true,
+    "files": [
+      "dist/**/*",
+      "electron-main.cjs",
+      "electron-preload.cjs",
+      "lib/whatsapp-cloud.cjs",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "build/icon.png",
+        "to": "icon.png"
+      }
+    ],
+    "win": {
+      "icon": "build/icon.ico",
+      "signExecutable": false,
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Roxy Tailor",
+      "uninstallDisplayName": "Roxy Tailor ${version}",
+      "menuCategory": "Roxy Tailor",
+      "deleteAppDataOnUninstall": true,
+      "runAfterFinish": true,
+      "differentialPackage": false,
+      "include": "build/installer.nsh",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerHeaderIcon": "build/icon.ico",
+      "artifactName": "roxy-tailor-v${version}-setup.exe"
+    },
+    "portable": {
+      "artifactName": "Roxy-Tailor-Portable-${version}.exe"
+    }
+  }
+}

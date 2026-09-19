@@ -1,0 +1,487 @@
+{% comment %}
+  Back-in-stock notify modal → Google Sheets (via Apps Script webhook).
+
+  Setup: paste google-sheets-notify-apps-script.gs into Google Apps Script,
+  deploy as Web app (Anyone), add URL to section setting "Google Sheets webhook URL".
+
+  Desktop: {% render 'modal-back-in-stock', section: section, product: product, google_sheets_url: section.settings.google_sheets_webhook_url %}
+  Mobile:  {% render 'modal-back-in-stock', section: section, product: product, use_section_settings: true, google_sheets_url: section.settings.google_sheets_webhook_url %}
+{% endcomment %}
+
+{% liquid
+  assign use_section_settings = use_section_settings | default: false
+  assign google_sheets_default_url = 'https://script.google.com/a/macros/gethelium.co/s/AKfycbyCVjoRYajHlpRtjSAnPB67DNxWkwcgOQrA5uxcZKdvpTa9L6Tipc2xu03lvPf72Hc/exec'
+  assign google_sheets_url = google_sheets_url | default: section.settings.google_sheets_webhook_url | default: google_sheets_default_url
+  assign product_image = product.selected_or_first_available_variant.featured_image | default: product.featured_image
+%}
+
+{% if use_section_settings %}
+  {% if section.settings.show_back_in_stock %}
+    {% assign modal_block_id = 'mobile' %}
+    {% assign modal_heading = section.settings.text_back_in_stock | default: 'Notify me' %}
+    {% assign form_uid = section.id | append: '-mobile' %}
+    {% assign form_id = 'ContactFormSoldout-' | append: form_uid %}
+<modal-dialog
+  id="modal-back-in-stock-{{ section.id }}-{{ modal_block_id }}"
+  class="product-popup-modal product-popup-modal-backinstock"
+>
+  <div
+    role="dialog"
+    aria-label="{{ modal_heading }}"
+    aria-modal="true"
+    class="product-popup-modal__content"
+    style="--modal-width:480px;"
+  >
+    <div class="modal__header flex justify-between ps-10 lg:ps-16 pe-6 lg:pe-8 py-6 lg:py-8 items-center border-b">
+      <h5>{{ modal_heading }}</h5>
+      <button
+        id="ModalClose-{{ modal_block_id }}"
+        type="button"
+        class="product-popup-modal__toggle modal__close-btn"
+        aria-label="{{ 'accessibility.close' | t }}"
+        tabindex="-1"
+      >
+        {% render 'icon-close' %}
+      </button>
+    </div>
+
+    <div class="product-popup-modal__content-info px-16 pt-10 pb-16">
+      <div class="pb-10">
+        <div class="text-size-small opacity-70">{{ 'products.product.back_in_stock.description' | t }}</div>
+        <div class="flex mt-8 gap-8 items-center">
+          {% if product_image %}
+            <div class="block basis-[90px]">
+              {% assign widths = '90,180' %}
+              {% assign height = 90 | divided_by: product_image.aspect_ratio | ceil %}
+              {% render 'responsive-image',
+                image: product_image,
+                widths: widths,
+                image_aspect_ratio: settings.card_image_size,
+                sizes: '90px',
+                width: '90',
+                height: height
+              %}
+            </div>
+          {%- endif -%}
+          <div>
+            <span class="card__heading">{{ product.title | escape }}</span>
+            <span id="sold-out-variant-name-{{ section.id }}-{{ modal_block_id }}" class="js-notify-variant-label">
+              {%- unless product.selected_or_first_available_variant.available -%}
+                - {{ product.selected_or_first_available_variant.title }}
+              {%- endunless -%}
+            </span>
+            <div class="product-card-sm__info__price">
+              {% render 'price', product: product, price_class: 'text-size-small', show_compare_at_price: true %}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <form
+        id="{{ form_id }}"
+        class="back_in_stock js-notify-sheets-form"
+        data-sheets-url="{{ google_sheets_url }}"
+        data-product-title="{{ product.title | escape }}"
+        data-product-url="{{ request.origin }}{{ product.url }}"
+        data-variant-id="{{ product.selected_or_first_available_variant.id }}"
+        data-variant-title="{{ product.selected_or_first_available_variant.title | escape }}"
+        data-source="{% if use_section_settings %}helium-mobile{% else %}desktop-pdp{% endif %}"
+        novalidate
+      >
+        <div class="fieldset flex flex-col justify-center gap-y-6">
+
+          <div class="js-notify-sheets-success form-status form-status-list form__message hidden" role="status" tabindex="-1">
+            {% render 'icon-success' %}
+            {{ 'templates.contact.form.post_success' | t | default: 'Thanks! We will notify you when this item is back.' }}
+          </div>
+          <div class="js-notify-sheets-error form-status caption-large text-body form__message hidden" role="alert" tabindex="-1">
+            {% render 'icon-error' %}
+            <span class="js-notify-sheets-error-text">Something went wrong. Please try again.</span>
+          </div>
+
+          <div class="contact__fields flex flex-col gap-y-6">
+            <div class="field field--with-error">
+              <input
+                type="text"
+                id="ContactFormSoldout-name-{{ form_uid }}"
+                class="field__input js-notify-field-name"
+                name="name"
+                autocomplete="name"
+                value="{% if customer %}{{ customer.name }}{% endif %}"
+                placeholder="Name"
+                aria-required="true"
+                required
+              >
+              <label class="field__label" for="ContactFormSoldout-name-{{ form_uid }}">
+                Name <span aria-hidden="true">*</span>
+              </label>
+            </div>
+
+            <div class="field field--with-error">
+              <input
+                type="tel"
+                id="ContactFormSoldout-phone-{{ form_uid }}"
+                class="field__input js-notify-field-phone"
+                name="phone"
+                autocomplete="tel"
+                placeholder="Phone number"
+                aria-required="true"
+                required
+                inputmode="tel"
+                minlength="10"
+                maxlength="15"
+                pattern="[0-9+\s\-()]{10,15}"
+              >
+              <label class="field__label" for="ContactFormSoldout-phone-{{ form_uid }}">
+                Phone number <span aria-hidden="true">*</span>
+              </label>
+            </div>
+
+            {% if product.has_only_default_variant == false %}
+              <div class="field">
+                <div class="select">
+                  <select
+                    id="ContactFormSoldout-select-{{ form_uid }}"
+                    class="field__input select__select js-notify-field-variant"
+                    name="variant"
+                  >
+                    {% for variant in product.variants %}
+                      <option
+                        value="{{ variant.title | escape }}"
+                        data-variant-id="{{ variant.id }}"
+                        {% if variant.id == product.selected_or_first_available_variant.id %}selected{% endif %}
+                      >
+                        {{ variant.title }}
+                      </option>
+                    {% endfor %}
+                  </select>
+                  {% render 'icon-caret' %}
+                </div>
+                <label class="field__label" for="ContactFormSoldout-select-{{ form_uid }}">
+                  {{ 'products.product.back_in_stock.variant' | t | default: 'Variant' }}
+                </label>
+              </div>
+            {% endif %}
+
+            <div class="field field--with-error">
+              <input
+                autocomplete="email"
+                type="email"
+                id="ContactFormSoldout-email-{{ form_uid }}"
+                class="field__input js-notify-field-email"
+                name="email"
+                spellcheck="false"
+                autocapitalize="off"
+                value="{% if customer %}{{ customer.email }}{% endif %}"
+                placeholder="{{ 'products.product.back_in_stock.email' | t | default: 'Email' }} (optional)"
+              >
+              <label class="field__label" for="ContactFormSoldout-email-{{ form_uid }}">
+                {{- 'products.product.back_in_stock.email' | t | default: 'Email' }}
+                <span class="caption">(optional)</span>
+              </label>
+            </div>
+          </div>
+
+          <div class="contact__button mt-5 text-center">
+            {%- assign text_button = 'products.product.back_in_stock.text_button' | t | default: 'Notify me' -%}
+            <button type="submit" class="btn btn-primary w-full js-notify-sheets-submit">
+              <span class="js-notify-sheets-submit-text">{{ text_button }}</span>
+              <span class="js-notify-sheets-submit-loading hidden" aria-hidden="true">...</span>
+            </button>
+          </div>
+
+        </div>
+      </form>
+    </div>
+  </div>
+</modal-dialog>
+  {% endif %}
+{% else %}
+  {% assign popups = section.blocks | where: 'type', 'buy_buttons' %}
+  {%- for block in popups -%}
+    {% if block.settings.show_back_in_stock %}
+      {% assign modal_block_id = block.id %}
+      {% assign modal_heading = block.settings.text_back_in_stock | default: 'Notify me' %}
+      {% assign form_uid = section.id | append: '-' | append: block.id %}
+      {% assign form_id = 'ContactFormSoldout-' | append: form_uid %}
+<modal-dialog
+  id="modal-back-in-stock-{{ section.id }}-{{ modal_block_id }}"
+  class="product-popup-modal product-popup-modal-backinstock"
+>
+  <div
+    role="dialog"
+    aria-label="{{ modal_heading }}"
+    aria-modal="true"
+    class="product-popup-modal__content"
+    style="--modal-width:480px;"
+  >
+    <div class="modal__header flex justify-between ps-10 lg:ps-16 pe-6 lg:pe-8 py-6 lg:py-8 items-center border-b">
+      <h5>{{ modal_heading }}</h5>
+      <button
+        id="ModalClose-{{ modal_block_id }}"
+        type="button"
+        class="product-popup-modal__toggle modal__close-btn"
+        aria-label="{{ 'accessibility.close' | t }}"
+        tabindex="-1"
+      >
+        {% render 'icon-close' %}
+      </button>
+    </div>
+
+    <div class="product-popup-modal__content-info px-16 pt-10 pb-16">
+      <div class="pb-10">
+        <div class="text-size-small opacity-70">{{ 'products.product.back_in_stock.description' | t }}</div>
+        <div class="flex mt-8 gap-8 items-center">
+          {% if product_image %}
+            <div class="block basis-[90px]">
+              {% assign widths = '90,180' %}
+              {% assign height = 90 | divided_by: product_image.aspect_ratio | ceil %}
+              {% render 'responsive-image',
+                image: product_image,
+                widths: widths,
+                image_aspect_ratio: settings.card_image_size,
+                sizes: '90px',
+                width: '90',
+                height: height
+              %}
+            </div>
+          {%- endif -%}
+          <div>
+            <span class="card__heading">{{ product.title | escape }}</span>
+            <span id="sold-out-variant-name-{{ section.id }}-{{ modal_block_id }}" class="js-notify-variant-label">
+              {%- unless product.selected_or_first_available_variant.available -%}
+                - {{ product.selected_or_first_available_variant.title }}
+              {%- endunless -%}
+            </span>
+            <div class="product-card-sm__info__price">
+              {% render 'price', product: product, price_class: 'text-size-small', show_compare_at_price: true %}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <form
+        id="{{ form_id }}"
+        class="back_in_stock js-notify-sheets-form"
+        data-sheets-url="{{ google_sheets_url }}"
+        data-product-title="{{ product.title | escape }}"
+        data-product-url="{{ request.origin }}{{ product.url }}"
+        data-variant-id="{{ product.selected_or_first_available_variant.id }}"
+        data-variant-title="{{ product.selected_or_first_available_variant.title | escape }}"
+        data-source="{% if use_section_settings %}helium-mobile{% else %}desktop-pdp{% endif %}"
+        novalidate
+      >
+        <div class="fieldset flex flex-col justify-center gap-y-6">
+
+          <div class="js-notify-sheets-success form-status form-status-list form__message hidden" role="status" tabindex="-1">
+            {% render 'icon-success' %}
+            {{ 'templates.contact.form.post_success' | t | default: 'Thanks! We will notify you when this item is back.' }}
+          </div>
+          <div class="js-notify-sheets-error form-status caption-large text-body form__message hidden" role="alert" tabindex="-1">
+            {% render 'icon-error' %}
+            <span class="js-notify-sheets-error-text">Something went wrong. Please try again.</span>
+          </div>
+
+          <div class="contact__fields flex flex-col gap-y-6">
+            <div class="field field--with-error">
+              <input
+                type="text"
+                id="ContactFormSoldout-name-{{ form_uid }}"
+                class="field__input js-notify-field-name"
+                name="name"
+                autocomplete="name"
+                value="{% if customer %}{{ customer.name }}{% endif %}"
+                placeholder="Name"
+                aria-required="true"
+                required
+              >
+              <label class="field__label" for="ContactFormSoldout-name-{{ form_uid }}">
+                Name <span aria-hidden="true">*</span>
+              </label>
+            </div>
+
+            <div class="field field--with-error">
+              <input
+                type="tel"
+                id="ContactFormSoldout-phone-{{ form_uid }}"
+                class="field__input js-notify-field-phone"
+                name="phone"
+                autocomplete="tel"
+                placeholder="Phone number"
+                aria-required="true"
+                required
+                inputmode="tel"
+                minlength="10"
+                maxlength="15"
+                pattern="[0-9+\s\-()]{10,15}"
+              >
+              <label class="field__label" for="ContactFormSoldout-phone-{{ form_uid }}">
+                Phone number <span aria-hidden="true">*</span>
+              </label>
+            </div>
+
+            {% if product.has_only_default_variant == false %}
+              <div class="field">
+                <div class="select">
+                  <select
+                    id="ContactFormSoldout-select-{{ form_uid }}"
+                    class="field__input select__select js-notify-field-variant"
+                    name="variant"
+                  >
+                    {% for variant in product.variants %}
+                      <option
+                        value="{{ variant.title | escape }}"
+                        data-variant-id="{{ variant.id }}"
+                        {% if variant.id == product.selected_or_first_available_variant.id %}selected{% endif %}
+                      >
+                        {{ variant.title }}
+                      </option>
+                    {% endfor %}
+                  </select>
+                  {% render 'icon-caret' %}
+                </div>
+                <label class="field__label" for="ContactFormSoldout-select-{{ form_uid }}">
+                  {{ 'products.product.back_in_stock.variant' | t | default: 'Variant' }}
+                </label>
+              </div>
+            {% endif %}
+
+            <div class="field field--with-error">
+              <input
+                autocomplete="email"
+                type="email"
+                id="ContactFormSoldout-email-{{ form_uid }}"
+                class="field__input js-notify-field-email"
+                name="email"
+                spellcheck="false"
+                autocapitalize="off"
+                value="{% if customer %}{{ customer.email }}{% endif %}"
+                placeholder="{{ 'products.product.back_in_stock.email' | t | default: 'Email' }} (optional)"
+              >
+              <label class="field__label" for="ContactFormSoldout-email-{{ form_uid }}">
+                {{- 'products.product.back_in_stock.email' | t | default: 'Email' }}
+                <span class="caption">(optional)</span>
+              </label>
+            </div>
+          </div>
+
+          <div class="contact__button mt-5 text-center">
+            {%- assign text_button = 'products.product.back_in_stock.text_button' | t | default: 'Notify me' -%}
+            <button type="submit" class="btn btn-primary w-full js-notify-sheets-submit">
+              <span class="js-notify-sheets-submit-text">{{ text_button }}</span>
+              <span class="js-notify-sheets-submit-loading hidden" aria-hidden="true">...</span>
+            </button>
+          </div>
+
+        </div>
+      </form>
+    </div>
+  </div>
+</modal-dialog>
+    {% endif %}
+  {%- endfor -%}
+{% endif %}
+
+<script>
+  (function () {
+    if (window.__notifySheetsBound) return;
+    window.__notifySheetsBound = true;
+
+    document.addEventListener('submit', function (event) {
+      var form = event.target.closest('.js-notify-sheets-form');
+      if (!form) return;
+
+      var sheetsUrl = (form.dataset.sheetsUrl || '').trim();
+      if (!sheetsUrl) {
+        return;
+      }
+
+      event.preventDefault();
+
+      var nameInput = form.querySelector('.js-notify-field-name');
+      var phoneInput = form.querySelector('.js-notify-field-phone');
+      var emailInput = form.querySelector('.js-notify-field-email');
+      var variantSelect = form.querySelector('.js-notify-field-variant');
+      var submitBtn = form.querySelector('.js-notify-sheets-submit');
+      var submitText = form.querySelector('.js-notify-sheets-submit-text');
+      var submitLoading = form.querySelector('.js-notify-sheets-submit-loading');
+      var successEl = form.querySelector('.js-notify-sheets-success');
+      var errorEl = form.querySelector('.js-notify-sheets-error');
+      var errorText = form.querySelector('.js-notify-sheets-error-text');
+
+      var name = nameInput ? nameInput.value.trim() : '';
+      var phone = phoneInput ? phoneInput.value.trim() : '';
+      var email = emailInput ? emailInput.value.trim() : '';
+
+      if (!name) {
+        if (errorEl) errorEl.classList.remove('hidden');
+        if (errorText) errorText.textContent = 'Please enter your name.';
+        if (nameInput) nameInput.focus();
+        return;
+      }
+
+      var phoneDigits = phone.replace(/\D/g, '');
+      if (!phone || phoneDigits.length < 10) {
+        if (errorEl) errorEl.classList.remove('hidden');
+        if (errorText) errorText.textContent = 'Please enter a valid 10-digit phone number.';
+        if (phoneInput) phoneInput.focus();
+        return;
+      }
+
+      if (email && emailInput && !emailInput.checkValidity()) {
+        if (errorEl) errorEl.classList.remove('hidden');
+        if (errorText) errorText.textContent = 'Please enter a valid email address.';
+        if (emailInput) emailInput.focus();
+        return;
+      }
+
+      if (errorEl) errorEl.classList.add('hidden');
+
+      var variantId = form.dataset.variantId || '';
+      var variantTitle = form.dataset.variantTitle || '';
+      if (variantSelect) {
+        var opt = variantSelect.options[variantSelect.selectedIndex];
+        variantTitle = opt ? opt.value : variantTitle;
+        variantId = opt && opt.dataset.variantId ? opt.dataset.variantId : variantId;
+      }
+
+      var payload = {
+        name: name,
+        phone: phone,
+        email: email,
+        product: form.dataset.productTitle || '',
+        variant: variantTitle,
+        variant_id: variantId,
+        product_url: form.dataset.productUrl || window.location.href,
+        source: form.dataset.source || 'shopify-notify'
+      };
+
+      if (submitBtn) submitBtn.disabled = true;
+      if (submitText) submitText.classList.add('hidden');
+      if (submitLoading) submitLoading.classList.remove('hidden');
+      if (successEl) successEl.classList.add('hidden');
+      if (errorEl) errorEl.classList.add('hidden');
+
+      var qs = new URLSearchParams(payload).toString();
+      var requestUrl = sheetsUrl + (sheetsUrl.indexOf('?') > -1 ? '&' : '?') + qs;
+
+      fetch(requestUrl, { method: 'GET', mode: 'no-cors' })
+        .then(function () {
+          if (successEl) {
+            successEl.classList.remove('hidden');
+            successEl.focus();
+          }
+          form.reset();
+        })
+        .catch(function (err) {
+          if (errorEl) errorEl.classList.remove('hidden');
+          if (errorText) errorText.textContent = err && err.message ? err.message : 'Could not save. Try again.';
+        })
+        .finally(function () {
+          if (submitBtn) submitBtn.disabled = false;
+          if (submitText) submitText.classList.remove('hidden');
+          if (submitLoading) submitLoading.classList.add('hidden');
+        });
+    });
+  })();
+</script>

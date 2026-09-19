@@ -1,0 +1,214 @@
+{% comment %}
+  Renders product buy-buttons.
+  Accepts:
+  - product: {Object} product object.
+  - block: {Object} passing the block information.
+  - product_form_id: {String} product form id.
+  - section_id: {String} id of section to which this snippet belongs.
+  - show_pickup_availability: {Boolean} for the pickup availability.
+  - force_sold_out: {Boolean} optional — from section; metafield is used if omitted.
+
+  Usage:
+  {% render 'buy-buttons',
+    block: block,
+    product: product,
+    product_form_id: product_form_id,
+    section_id: section.id,
+    show_pickup_availability: true,
+    force_sold_out: force_sold_out
+  %}
+{% endcomment %}
+
+{% liquid
+  assign button_style = block.settings.button_type | default: 'outline'
+  case button_style
+    when 'primary'
+      assign style_class = 'btn btn-primary'
+    when 'outline'
+      assign style_class = 'btn btn-outline'
+    when 'underlined'
+      assign style_class = 'btn btn-underlined'
+    when 'primary-white'
+      assign style_class = 'btn btn-primary-white'
+    when 'outline-white'
+      assign style_class = 'btn btn-outline-white'
+    when 'underlined-white'
+      assign style_class = 'btn btn-underlined btn-underlined-white'
+    when 'secondary'
+      assign style_class = 'btn btn-secondary'
+    when 'link'
+      assign style_class = 'link'
+    else
+      assign style_class = 'btn btn-primary'
+  endcase
+
+  assign force_sold_out = force_sold_out | default: false
+  unless force_sold_out
+    assign show_sold_out_metafield = product.metafields.custom.show_sold_out.value | default: product.metafields.custom.show_sold_out
+    if show_sold_out_metafield == true or show_sold_out_metafield == 'true' or show_sold_out_metafield == 1
+      assign force_sold_out = true
+    endif
+  endunless
+%}
+
+<div {{ block.shopify_attributes }}>
+  {%- if product != blank -%}
+    {%- liquid
+      assign gift_card_recipient_feature_active = false
+      if block.settings.show_gift_card_recipient and product.gift_card?
+        assign gift_card_recipient_feature_active = true
+      endif
+
+      assign show_dynamic_checkout = false
+      if block.settings.show_dynamic_checkout and gift_card_recipient_feature_active == false and force_sold_out == false
+        assign show_dynamic_checkout = true
+      endif
+
+      assign check_against_inventory = true
+      if product.selected_or_first_available_variant.inventory_management != 'shopify' or product.selected_or_first_available_variant.inventory_policy == 'continue'
+        assign check_against_inventory = false
+      endif
+      if product.selected_or_first_available_variant.quantity_rule.min > product.selected_or_first_available_variant.inventory_quantity and check_against_inventory
+        assign quantity_rule_soldout = true
+      endif
+
+      assign is_sold_out = false
+      if force_sold_out or product.selected_or_first_available_variant.available == false or quantity_rule_soldout
+        assign is_sold_out = true
+      endif
+    -%}
+
+    <product-form
+      class="product-form"
+      data-hide-errors="{{ gift_card_recipient_feature_active }}"
+      data-section-id="{{ section.id }}"
+      {% if force_sold_out %}data-force-sold-out="true"{% endif %}
+    >
+      <div class="product-form__error-message-wrapper" role="alert" hidden>
+        {% render 'icon-error' %}
+        <span class="product-form__error-message"></span>
+      </div>
+
+      {%- form 'product',
+        product,
+        id: product_form_id,
+        class: 'form',
+        novalidate: 'novalidate',
+        data-type: 'add-to-cart-form'
+      -%}
+        <input
+          type="hidden"
+          name="id"
+          value="{{ product.selected_or_first_available_variant.id }}"
+          {% if is_sold_out %}
+            disabled
+          {% endif %}
+          class="product-variant-id"
+        >
+
+        {%- if gift_card_recipient_feature_active -%}
+          {%- render 'gift-card-recipient-form', product: product, form: form, section: section -%}
+        {%- endif -%}
+
+        <div class="product-form__buttons grid gap-5 {% if block.settings.show_two_columns %} lg:grid-cols-2 grid-cols-1 {% else %} grid-cols-1 {% endif %}">
+          <button
+            id="ProductSubmitButton-{{ section_id }}"
+            type="submit"
+            name="add"
+            {% if product.metafields.ortheme.preorder and force_sold_out == false %}
+              data-preorder="true"
+            {% endif %}
+            class="product-form__submit btn button--full-width {{ style_class }}{% if is_sold_out %} product-form__submit--sold-out{% endif %}"
+            {% if is_sold_out %}
+              disabled
+            {% endif %}
+          >
+            <span>
+              {%- if is_sold_out -%}
+                {{ 'products.product.sold_out' | t }}
+              {%- elsif product.metafields.ortheme.preorder -%}
+                {{ 'products.product.pre_order' | t }}
+              {%- else -%}
+                {{ 'products.product.add_to_cart' | t }}
+              {%- endif -%}
+            </span>
+            {% if block.settings.show_price_in_button and is_sold_out == false %}
+              <span class="buttonPrice">— {{ product.selected_or_first_available_variant.price | money }}</span>
+            {% endif %}
+            {%- render 'loading-spinner' -%}
+          </button>
+
+          {%- if show_dynamic_checkout -%}
+            {{ form | payment_button }}
+          {%- endif -%}
+        </div>
+      {%- endform -%}
+    </product-form>
+  {%- else -%}
+    <div class="product-form">
+      <div class="product-form__buttons form">
+        <button
+          type="submit"
+          name="add"
+          class="product-form__submit btn button--full-width btn-primary product-form__submit--sold-out"
+          disabled
+        >
+          {{ 'products.product.sold_out' | t }}
+        </button>
+      </div>
+    </div>
+  {%- endif -%}
+
+  {% if block.settings.show_back_in_stock %}
+    <div
+      id="sold-out-message-{{ section.id }}"
+      class="{% unless is_sold_out %}hidden{% endunless %} mb-8 product-back-in-stock"
+    >
+      <modal-opener
+        class="product-popup-modal__opener product__info-inner w-full"
+        data-modal="#modal-back-in-stock-{{ section.id }}-{{ block.id }}"
+      >
+        <button
+          id="ProductPopup-{{ block.id }}"
+          class="product-popup-modal__button btn btn-outline w-full"
+          type="button"
+          aria-haspopup="dialog"
+        >
+          {{ block.settings.text_back_in_stock | default: 'Notify me' }}
+        </button>
+      </modal-opener>
+    </div>
+  {% endif %}
+
+  {%- if show_pickup_availability and force_sold_out == false -%}
+    {{ 'component-pickup-availability.css' | asset_url | stylesheet_tag }}
+
+    {%- assign pick_up_availabilities = product.selected_or_first_available_variant.store_availabilities
+      | where: 'pick_up_enabled', true
+    -%}
+
+    <pickup-availability
+      class="product__pickup-availabilities quick-add-hidden"
+      {% if product.selected_or_first_available_variant.available and pick_up_availabilities.size > 0 %}
+        available
+      {% endif %}
+      data-root-url="{{ routes.root_url }}"
+      data-variant-id="{{ product.selected_or_first_available_variant.id }}"
+      data-has-only-default-variant="{{ product.has_only_default_variant }}"
+      data-product-page-color-scheme="gradient"
+    >
+      <template>
+        <pickup-availability-preview class="pickup-availability-preview">
+          {% render 'icon-unavailable' %}
+          <div class="pickup-availability-info">
+            <p class="pickup-availability-title">{{ 'products.product.pickup_availability.unavailable' | t }}</p>
+            <button class="pickup-availability-button link link--text underlined-link">
+              {{ 'products.product.pickup_availability.refresh' | t }}
+            </button>
+          </div>
+        </pickup-availability-preview>
+      </template>
+    </pickup-availability>
+    <script src="{{ 'pickup-availability.js' | asset_url }}" defer="defer"></script>
+  {%- endif -%}
+</div>

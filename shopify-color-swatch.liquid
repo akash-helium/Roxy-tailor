@@ -1,0 +1,149 @@
+{%- comment -%}
+  Color Swatch Cards — reloads page on variant select (simple & reliable)
+  Usage: {% render 'color-swatch', product: product, option: option, section: section %}
+{%- endcomment -%}
+
+{%- assign current_option_index = option.position -%}
+{%- assign option_index = current_option_index | minus: 1 -%}
+{%- assign grad_1 = '#04B344' -%}
+{%- assign grad_2 = '#1B66EF' -%}
+{%- assign selected_variant = product.selected_or_first_available_variant -%}
+
+<div class="ColorSwatchContainer">
+  <div class="ColorSwatch__Header">
+    <span class="ColorSwatch__Label">{{ option.name }} :</span>
+    <span class="ColorSwatch__CurrentValue">
+      {{ selected_variant.options[option_index] | default: option.selected_value }}
+    </span>
+  </div>
+
+  <ul class="ColorSwatchList">
+    {%- for value in option.values -%}
+      {%- assign swatch_image = value | handle | append: '.png' | asset_url -%}
+      {%- assign swatch_variant_id = '' -%}
+      {%- assign swatch_variant_available = false -%}
+      {%- assign is_selected = false -%}
+
+      {%- for variant in product.variants -%}
+        {%- if variant.options[option_index] == value -%}
+          {%- assign swatch_variant_id = variant.id -%}
+          {%- assign swatch_variant_available = variant.available -%}
+          {%- if variant.id == selected_variant.id -%}
+            {%- assign is_selected = true -%}
+          {%- endif -%}
+          {%- if variant.image -%}
+            {%- assign swatch_image = variant.image | image_url: width: 200 -%}
+          {%- endif -%}
+          {%- break -%}
+        {%- endif -%}
+      {%- endfor -%}
+
+      <li class="ColorSwatchList__Item">
+        <a
+          href="{{ product.url }}?variant={{ swatch_variant_id }}"
+          class="ColorSwatch {% if is_selected %}is-active{% endif %}{% unless swatch_variant_available %} is-sold-out{% endunless %}"
+          title="{{ value | escape }}{% unless swatch_variant_available %} (Sold out){% endunless %}"
+          aria-label="{{ option.name }}: {{ value | escape }}"
+          {% if is_selected %}aria-current="true"{% endif %}
+        >
+          <div class="ColorSwatch__ImageWrapper" style="background-image: url('{{ swatch_image }}');"></div>
+        </a>
+      </li>
+    {%- endfor -%}
+  </ul>
+</div>
+
+<style>
+  .ColorSwatchContainer {
+    margin: 0;
+    padding: 5px 0;
+    border-top: 1px solid #eeeeee;
+    border-bottom: 1px solid #eeeeee;
+    font-family: 'Montserrat', sans-serif;
+  }
+
+  .ColorSwatch__Header {
+    margin-bottom: 0;
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+  }
+
+  .ColorSwatch__Label {
+    font-size: 14px;
+    font-weight: 500;
+    color: #444;
+  }
+
+  .ColorSwatch__CurrentValue {
+    font-size: 16px;
+    font-weight: 600;
+    color: #000;
+  }
+
+  .ColorSwatchList {
+    display: flex;
+    gap: 12px;
+    list-style: none;
+    padding: 4px;
+    margin: 0;
+    flex-wrap: wrap;
+  }
+
+  .ColorSwatch {
+    position: relative;
+    display: block;
+    width: 85px;
+    height: 85px;
+    border-radius: 22px;
+    cursor: pointer;
+    border: 2px solid #e5e5e5;
+    background: #fff;
+    transition: all 0.2s ease;
+    text-decoration: none;
+  }
+
+  .ColorSwatch.is-sold-out {
+    opacity: 0.45;
+  }
+
+  .ColorSwatch__ImageWrapper {
+    width: 100%;
+    height: 100%;
+    background-size: 85%;
+    background-position: center;
+    background-repeat: no-repeat;
+    border-radius: 20px;
+  }
+
+  .ColorSwatch.is-active::before {
+    content: '';
+    position: absolute;
+    inset: -2px;
+    border-radius: 22px;
+    padding: 2.5px;
+    background: linear-gradient(135deg, {{ grad_1 }}, {{ grad_2 }});
+    -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
+  }
+
+  .ColorSwatch.is-active {
+    border-color: transparent;
+  }
+
+  /* Hide theme's default color dropdown */
+  variant-selects fieldset.product-form__input:has(select[name*="color" i]),
+  variant-selects fieldset.product-form__input:has(select[name*="Colour" i]) {
+    display: none !important;
+  }
+
+  @media screen and (max-width: 767px) {
+    .ColorSwatch__Label { font-size: 12px; }
+    .ColorSwatch__CurrentValue { font-size: 13px; }
+    .ColorSwatch { width: 70px; height: 70px; border-radius: 18px; }
+    .ColorSwatch.is-active::before { border-radius: 18px; }
+    .ColorSwatch__ImageWrapper { border-radius: 16px; }
+  }
+</style>

@@ -1,0 +1,110 @@
+{% comment %}
+  Removes cart lines for products with custom.show_sold_out = true.
+  Add to cart-drawer.liquid before the final {%- endif -%}:
+  {% render 'cart-drawer-force-sold-out-cleanup' %}
+{% endcomment %}
+
+{%- liquid
+  assign force_sold_out_lines = ''
+  for item in cart.items
+    assign show_sold_out_metafield = item.product.metafields.custom.show_sold_out.value | default: item.product.metafields.custom.show_sold_out
+    assign item_force_sold_out = false
+    if show_sold_out_metafield == true or show_sold_out_metafield == 'true' or show_sold_out_metafield == 1
+      assign item_force_sold_out = true
+    endif
+    if item_force_sold_out
+      assign line_no = item.index | plus: 1
+      if force_sold_out_lines != ''
+        assign force_sold_out_lines = force_sold_out_lines | append: ','
+      endif
+      assign force_sold_out_lines = force_sold_out_lines | append: line_no
+    endif
+  endfor
+-%}
+
+{%- if force_sold_out_lines != '' -%}
+  <script>
+    (function () {
+      if (window.__heliumForceSoldOutCartCleanup) return;
+      window.__heliumForceSoldOutCartCleanup = true;
+
+      var lines = {{ force_sold_out_lines | split: ',' | json }};
+      if (!lines || !lines.length) return;
+
+      var root = (window.Shopify && window.Shopify.routes && window.Shopify.routes.root) || '/';
+
+      function getSectionsToRender() {
+        var cartDrawer = document.querySelector('cart-drawer');
+        if (cartDrawer && typeof cartDrawer.getSectionsToRender === 'function') {
+          return cartDrawer
+            .getSectionsToRender()
+            .map(function (section) {
+              return section.id;
+            })
+            .join(',');
+        }
+        return 'cart-drawer,cart-icon-bubble';
+      }
+
+      function refreshCartDrawer(data) {
+        var cartDrawer = document.querySelector('cart-drawer');
+        if (cartDrawer && data && typeof cartDrawer.renderContents === 'function') {
+          cartDrawer.renderContents(data);
+          if (data.item_count === 0) {
+            cartDrawer.classList.add('is-empty');
+          }
+          document.dispatchEvent(new CustomEvent('cart:updated', { bubbles: true, detail: { cart: data } }));
+          return;
+        }
+        window.location.reload();
+      }
+
+      async function removeForceSoldOutLines() {
+        var cartDrawer = document.querySelector('cart-drawer');
+        if (cartDrawer && cartDrawer.classList.contains('is-empty') && lines.length === 0) return;
+
+        var sorted = lines
+          .map(function (line) {
+            return parseInt(line, 10);
+          })
+          .filter(function (n) {
+            return !isNaN(n) && n > 0;
+          })
+          .sort(function (a, b) {
+            return b - a;
+          });
+
+        if (!sorted.length) return;
+
+        var sections = getSectionsToRender();
+        var lastResponse = null;
+
+        for (var i = 0; i < sorted.length; i++) {
+          var payload = {
+            line: sorted[i],
+            quantity: 0
+          };
+          if (i === sorted.length - 1) {
+            payload.sections = sections;
+            payload.sections_url = window.location.pathname;
+          }
+
+          var response = await fetch(root + 'cart/change.js', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+          lastResponse = await response.json();
+        }
+
+        refreshCartDrawer(lastResponse);
+      }
+
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', removeForceSoldOutLines);
+      } else {
+        removeForceSoldOutLines();
+      }
+    })();
+  </script>
+{%- endif -%}

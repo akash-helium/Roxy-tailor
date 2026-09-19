@@ -1,0 +1,335 @@
+import { useState } from 'react';
+import { createPortal } from 'react-dom';
+import { ChevronDown, ChevronUp, Plus, Save, Trash2, X } from 'lucide-react';
+import type { Cloth, Staff, StaffPayout } from '../types';
+import { updateClothStaffPayments, updateStaffPayouts } from '../lib/data';
+import {
+  formatCurrency,
+  getStaffCloths,
+  getStaffPayFields,
+  parseAmount,
+  staffPayPatch,
+  staffPayPending,
+  summarizeStaffPayments,
+  type StaffPayInput,
+} from '../lib/payments';
+import { clothDescription, formatCalendarDate, generateId, todayDateString } from '../lib/utils';
+import { sortStaffPayouts } from '../lib/staff-payouts';
+import { CLOTH_STATUS_COLORS, CLOTH_STATUS_LABELS } from '../types';
+import { useAndroidBackHandler } from '../hooks/useAndroidBackHandler';
+import { Badge, Button, Card, Input, Textarea } from './ui';
+
+function StaffPayForm({
+  pay,
+  onChange,
+}: {
+  pay: StaffPayInput;
+  onChange: (pay: StaffPayInput) => void;
+}) {
+  const pending = staffPayPending(pay.amount, pay.advance, pay.final);
+
+  return (
+    <div className="space-y-3">
+      <Input
+        label="Pay Amount (₹)"
+        type="number"
+        min="0"
+        step="0.01"
+        value={pay.amount || ''}
+        onChange={(e) => onChange({ ...pay, amount: parseAmount(e.target.value) })}
+        placeholder="Agreed pay for this cloth"
+      />
+      <Input
+        label="Advance Paid (₹)"
+        type="number"
+        min="0"
+        step="0.01"
+        value={pay.advance || ''}
+        onChange={(e) => onChange({ ...pay, advance: parseAmount(e.target.value) })}
+        placeholder="Advance to staff"
+      />
+      <Input
+        label="Final Paid (₹)"
+        type="number"
+        min="0"
+        step="0.01"
+        value={pay.final || ''}
+        onChange={(e) => onChange({ ...pay, final: parseAmount(e.target.value) })}
+        placeholder="Final payment to staff"
+      />
+      <div className="rounded-xl bg-white px-3 py-2 text-sm">
+        <span className="text-slate-500">Pending: </span>
+        <strong className="text-amber-700">{formatCurrency(pending)}</strong>
+      </div>
+      <Textarea
+        label="Remarks"
+        value={pay.remarks}
+        onChange={(e) => onChange({ ...pay, remarks: e.target.value })}
+        placeholder="Payment notes for this cloth"
+        rows={2}
+      />
+    </div>
+  );
+}
+
+function ClothStaffPayRow({
+  cloth,
+  staff,
+  onSaved,
+}: {
+  cloth: Cloth;
+  staff: Staff;
+  onSaved: () => void;
+}) {
+  const initial = getStaffPayFields(cloth, staff.type);
+  const [open, setOpen] = useState(false);
+  const [pay, setPay] = useState<StaffPayInput>(initial);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const pending = staffPayPending(pay.amount, pay.advance, pay.final);
+  const status = cloth.status in CLOTH_STATUS_LABELS ? cloth.status : 'cutting';
+
+  async function handleSave() {
+    setBusy(true);
+    setError(null);
+    try {
+      await updateClothStaffPayments(cloth.id, staffPayPatch(staff.type, pay));
+      onSaved();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save payment');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card className="overflow-hidden p-0">
+      <button
+        type="button"
+        className="flex w-full items-center justify-between gap-3 p-4 text-left"
+        onClick={() => setOpen((value) => !value)}
+      >
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="font-mono text-sm font-bold text-indigo-600">{cloth.code}</p>
+            <Badge className={CLOTH_STATUS_COLORS[status]}>{CLOTH_STATUS_LABELS[status]}</Badge>
+          </div>
+          <p className="truncate font-medium text-slate-900">{cloth.customerName}</p>
+          <p className="text-xs text-slate-500">{clothDescription(cloth)} · Pending {formatCurrency(pending)}</p>
+        </div>
+        {open ? (
+          <ChevronUp className="h-5 w-5 shrink-0 text-slate-400" />
+        ) : (
+          <ChevronDown className="h-5 w-5 shrink-0 text-slate-400" />
+        )}
+      </button>
+
+      {open && (
+        <div className="border-t border-slate-100 bg-slate-50/80 p-4">
+          {error && (
+            <p className="mb-3 rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-600">{error}</p>
+          )}
+          <StaffPayForm pay={pay} onChange={setPay} />
+          <Button
+            className="mt-4 w-full rounded-full py-3"
+            disabled={busy}
+            onClick={() => void handleSave()}
+          >
+            <Save className="h-4 w-4" />
+            {busy ? 'Saving...' : 'Save Payment'}
+          </Button>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+export function StaffPaymentSheet({
+  staff,
+  cloths,
+  onClose,
+  onUpdated,
+}: {
+  staff: Staff;
+  cloths: Cloth[];
+  onClose: () => void;
+  onUpdated: () => void;
+}) {
+  useAndroidBackHandler(onClose);
+  const assigned = getStaffCloths(staff.id, staff.type, cloths);
+  const liveStaff: Staff = { ...staff, payouts: staff.payouts ?? [] };
+  const summary = summarizeStaffPayments(liveStaff, cloths);
+  const [amount, setAmount] = useState('');
+  const [date, setDate] = useState(todayDateString());
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const ledger = sortStaffPayouts(liveStaff.payouts);
+
+  async function savePayouts(next: StaffPayout[]) {
+    setBusy(true);
+    setError(null);
+    try {
+      await updateStaffPayouts(staff.id, next);
+      onUpdated();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save payout');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleAddPayout() {
+    const payoutAmount = parseAmount(amount);
+    if (payoutAmount <= 0) {
+      setError('Enter a payout amount');
+      return;
+    }
+    await savePayouts([
+      {
+        id: generateId(),
+        amount: payoutAmount,
+        date: date.trim() || todayDateString(),
+        note: note.trim() || undefined,
+      },
+      ...liveStaff.payouts,
+    ]);
+    setAmount('');
+    setNote('');
+    setDate(todayDateString());
+  }
+
+  return createPortal(
+    <div className="fixed inset-0 z-[200] flex items-end justify-center bg-slate-900/40 sm:items-center">
+      <button type="button" className="absolute inset-0" aria-label="Close" onClick={onClose} />
+      <div className="relative z-10 max-h-[90dvh] w-full max-w-md overflow-y-auto rounded-t-3xl border border-slate-100 bg-white p-5 shadow-2xl sm:rounded-3xl">
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <div>
+            <p className="text-lg font-bold text-slate-900">{staff.name}</p>
+            <p className="text-sm text-slate-500">
+              {assigned.length} cloth{assigned.length === 1 ? '' : 's'} · Payout ledger
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg p-1 text-slate-400 hover:bg-slate-100"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <div className="mb-4 grid grid-cols-2 gap-2 text-sm">
+          <div className="rounded-xl bg-slate-50 px-3 py-2">
+            <p className="text-xs text-slate-500">Total pay</p>
+            <p className="font-semibold text-slate-900">{formatCurrency(summary.totalAmount)}</p>
+          </div>
+          <div className="rounded-xl bg-emerald-50 px-3 py-2">
+            <p className="text-xs text-emerald-700">Paid</p>
+            <p className="font-semibold text-emerald-800">{formatCurrency(summary.paid)}</p>
+          </div>
+          <div className="col-span-2 rounded-xl bg-amber-50 px-3 py-2">
+            <p className="text-xs text-amber-700">Pending to pay</p>
+            <p className="font-semibold text-amber-800">{formatCurrency(summary.totalPending)}</p>
+          </div>
+        </div>
+
+        <div className="mb-4 rounded-2xl border border-indigo-200 bg-indigo-50/50 p-4">
+          <p className="mb-3 text-sm font-semibold text-slate-800">Payout ledger</p>
+          {error && (
+            <p className="mb-3 rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-600">{error}</p>
+          )}
+          <div className="grid grid-cols-2 gap-3">
+            <Input
+              label="Payout amount (₹)"
+              type="number"
+              min="0"
+              step="0.01"
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              placeholder="500"
+            />
+            <Input
+              label="Payout date"
+              type="date"
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+              required
+            />
+          </div>
+          <div className="mt-3">
+            <Input
+              label="Note (optional)"
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder="Cash / UPI / cloth code"
+            />
+          </div>
+          <Button
+            className="mt-3 w-full rounded-full py-3"
+            disabled={busy}
+            onClick={() => void handleAddPayout()}
+          >
+            <Plus className="h-4 w-4" />
+            {busy ? 'Saving...' : 'Add payout'}
+          </Button>
+
+          {ledger.length === 0 ? (
+            <p className="mt-3 text-xs text-slate-500">No payouts recorded yet.</p>
+          ) : (
+            <div className="mt-3 space-y-2">
+              {ledger.map((payout) => (
+                <div
+                  key={payout.id}
+                  className="flex items-center justify-between gap-3 rounded-xl border border-indigo-100 bg-white px-3 py-2"
+                >
+                  <div className="min-w-0">
+                    <p className="font-semibold text-slate-900">{formatCurrency(payout.amount)}</p>
+                    <p className="text-xs text-slate-500">
+                      {formatCalendarDate(payout.date || null)}
+                      {payout.note ? ` · ${payout.note}` : ''}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() =>
+                      void savePayouts(liveStaff.payouts.filter((item) => item.id !== payout.id))
+                    }
+                    className="rounded-lg p-2 text-slate-400 hover:bg-rose-50 hover:text-rose-500"
+                    aria-label="Remove payout"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
+          Agreed pay per cloth
+        </p>
+        {assigned.length === 0 ? (
+          <Card className="py-8 text-center text-sm text-slate-500">
+            No cloths assigned to this staff yet.
+          </Card>
+        ) : (
+          <div className="space-y-3">
+            {assigned.map((cloth) => (
+              <ClothStaffPayRow
+                key={cloth.id}
+                cloth={cloth}
+                staff={staff}
+                onSaved={onUpdated}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+export { StaffPayForm };

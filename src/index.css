@@ -1,0 +1,42 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: 'Inter', system-ui, sans-serif;
+}
+
+:root {
+  font-family: var(--font-sans);
+  line-height: 1.5;
+  font-weight: 400;
+  color-scheme: light;
+  color: #0f172a;
+  background-color: #f4f6fb;
+}
+
+:root {
+  --android-safe-top: 0px;
+  --android-safe-bottom: 0px;
+  --android-safe-left: 0px;
+  --android-safe-right: 0px;
+  --app-safe-top: max(env(safe-area-inset-top, 0px), var(--android-safe-top));
+  --app-safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--android-safe-bottom));
+  --app-safe-left: max(env(safe-area-inset-left, 0px), var(--android-safe-left));
+  --app-safe-right: max(env(safe-area-inset-right, 0px), var(--android-safe-right));
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  min-height: 100dvh;
+  background: linear-gradient(180deg, #f8faff 0%, #f4f6fb 100%);
+}
+
+#root,
+.app-root {
+  min-height: 100dvh;
+}
+
+#barcode-reader video {
+  border-radius: 1rem;
+}
