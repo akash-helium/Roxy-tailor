@@ -11,6 +11,7 @@ import {
   type ReactNode,
 } from 'react';
 import { createPortal } from 'react-dom';
+import { CheckCircle2 } from 'lucide-react';
 import { useAndroidBackHandler } from '../hooks/useAndroidBackHandler';
 import { useVisualViewport } from '../hooks/useVisualViewport';
 
@@ -615,6 +616,43 @@ export function Modal({
         >
           {children}
         </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+const TOAST_EVENT = 'app-toast';
+
+export function showToast(message: string) {
+  window.dispatchEvent(new CustomEvent(TOAST_EVENT, { detail: message }));
+}
+
+export function ToastHost() {
+  const [message, setMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    const onToast = (event: Event) => {
+      const next = (event as CustomEvent<string>).detail?.trim();
+      if (next) setMessage(next);
+    };
+    window.addEventListener(TOAST_EVENT, onToast);
+    return () => window.removeEventListener(TOAST_EVENT, onToast);
+  }, []);
+
+  useEffect(() => {
+    if (!message) return;
+    const timer = window.setTimeout(() => setMessage(null), 2500);
+    return () => window.clearTimeout(timer);
+  }, [message]);
+
+  if (!message) return null;
+
+  return createPortal(
+    <div className="pointer-events-none fixed inset-x-0 bottom-8 z-[400] flex justify-center px-4">
+      <div className="flex items-center gap-2 rounded-full bg-slate-900 px-4 py-2.5 text-sm font-medium text-white shadow-lg">
+        <CheckCircle2 className="h-4 w-4 text-emerald-400" />
+        {message}
       </div>
     </div>,
     document.body,

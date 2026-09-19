@@ -2,8 +2,9 @@ import type { Cloth } from '../types';
 import { summarizePayments } from './payments';
 import { clothBillName } from './utils';
 
-/** Groups cloths registered together (same customer, date, notes, and per-piece payment split). */
+/** Groups cloths registered together (same batch, or same customer/date/notes/pay for older rows). */
 export function customerOrderKey(cloth: Cloth): string {
+  if (cloth.orderBatchId) return `batch:${cloth.orderBatchId}`;
   const name = cloth.customerName.trim().toLowerCase();
   const given = cloth.givenDate ?? '';
   const notes = (cloth.notes ?? '').trim();

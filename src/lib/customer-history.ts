@@ -11,7 +11,7 @@ function normalizeName(name: string) {
   return name.trim().toLowerCase();
 }
 
-function normalizePhone(phone?: string | null) {
+export function normalizePhone(phone?: string | null) {
   const digits = (phone ?? '').replace(/\D/g, '');
   if (digits.length >= 10) return digits.slice(-10);
   return digits;
@@ -34,23 +34,33 @@ function clothTime(cloth: Cloth) {
 }
 
 export function listKnownCustomers(cloths: Cloth[]): KnownCustomer[] {
-  const byName = new Map<string, KnownCustomer>();
+  const byKey = new Map<string, KnownCustomer>();
 
   for (const cloth of cloths) {
-    const key = normalizeName(cloth.customerName);
-    if (!key) continue;
+    const name = cloth.customerName.trim();
+    const phone = normalizePhone(cloth.customerPhone);
+    if (!name && phone.length !== 10) continue;
+    const key = phone.length === 10 ? `p:${phone}` : `n:${normalizeName(name)}`;
     const next: KnownCustomer = {
-      name: cloth.customerName.trim(),
-      phone: cloth.customerPhone?.trim() ?? '',
+      name: name || cloth.customerName.trim(),
+      phone: phone.length === 10 ? phone : cloth.customerPhone?.trim() ?? '',
       updatedAt: clothTime(cloth),
     };
-    const existing = byName.get(key);
+    const existing = byKey.get(key);
     if (!existing || next.updatedAt.localeCompare(existing.updatedAt) > 0) {
-      byName.set(key, next);
+      byKey.set(key, next);
     }
   }
 
-  return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+  return [...byKey.values()].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+}
+
+export function suggestCustomersByPhone(cloths: Cloth[], phoneQuery: string): KnownCustomer[] {
+  const digits = phoneQuery.replace(/\D/g, '');
+  if (digits.length < 3) return [];
+  return listKnownCustomers(cloths)
+    .filter((customer) => normalizePhone(customer.phone).includes(digits))
+    .slice(0, 8);
 }
 
 export function findKnownCustomer(cloths: Cloth[], name: string): KnownCustomer | null {
@@ -87,10 +97,18 @@ export function latestSizingForCustomer(
   phone: string,
   garmentType: string,
 ): RememberedSizing | null {
-  if (!normalizeName(name) || !garmentType) return null;
+  const wantedPhone = normalizePhone(phone);
+  const wantedName = normalizeName(name);
+  if ((!wantedName && wantedPhone.length !== 10) || !garmentType) return null;
 
   const match = cloths
-    .filter((cloth) => customerMatches(cloth, name, phone) && sameGarment(cloth, garmentType))
+    .filter((cloth) => {
+      if (!sameGarment(cloth, garmentType)) return false;
+      if (wantedPhone.length === 10 && normalizePhone(cloth.customerPhone) === wantedPhone) {
+        return true;
+      }
+      return wantedName ? customerMatches(cloth, name, phone) : false;
+    })
     .sort((a, b) => clothTime(b).localeCompare(clothTime(a)))[0];
 
   if (!match) return null;

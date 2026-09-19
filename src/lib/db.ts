@@ -1,7 +1,7 @@
 import { supabase } from "./supabase";
 import { mapCloth, mapStaff } from "./mappers";
 import { nextClothCodes } from "./utils";
-import type { Cloth, StaffType } from "../types";
+import type { Cloth, ClothStaffJob, StaffType } from "../types";
 import { escapeIlike, CLOTH_PAGE_SIZE } from "./cloth-list";
 import type { ClothStatusFilter } from "./cloth-list";
 
@@ -46,6 +46,7 @@ function staffPayPatchToRow(patch: StaffPayPatch): ClothUpdate {
 
 import { resolveShopUserId } from "./shop-user";
 import { parseMeasurementChecks, measurementChecksPayload } from "./measurements";
+import { applyLegacyPayColumns } from "./staff-jobs";
 import { joinStaffNotes, splitStaffNotes } from "./staff-payouts";
 import type { DatedAmount, StaffPayout } from "../types";
 
@@ -233,6 +234,8 @@ export type RegisterClothInput = {
   cutterPayAmount?: number;
   tailorPayAmount?: number;
   code?: string;
+  orderBatchId?: string;
+  staffJobs?: import("../types").ClothStaffJob[];
 };
 
 function toClothInsertRow(
@@ -257,7 +260,11 @@ function toClothInsertRow(
       advanceDate: input.advanceAmount > 0 ? input.givenDate : '',
       finalPaymentDate: '',
       deliveryDate: input.deliveryDate,
+      orderBatchId: input.orderBatchId,
+      staffJobs: input.staffJobs ?? [],
+      customerPhone: input.customerPhone,
     }),
+    staff_jobs: (input.staffJobs ?? []) as unknown as Json,
     measurement_image: null,
     notes: input.notes,
     status: "cutting" as const,
@@ -285,10 +292,25 @@ function isMissingCustomerPhoneColumn(error: { message?: string } | null) {
   return Boolean(error?.message && /customer_phone/i.test(error.message));
 }
 
+function isMissingStaffJobsColumn(error: { message?: string } | null) {
+  return Boolean(error?.message && /staff_jobs/i.test(error.message));
+}
+
 async function insertClothRows(rows: ReturnType<typeof toClothInsertRow>[]) {
   const first = await supabase.from("cloths").insert(rows).select("*");
+  if (first.error && isMissingStaffJobsColumn(first.error)) {
+    const strippedJobs = rows.map(({ staff_jobs: _jobs, ...rest }) => rest);
+    return insertClothRowsWithoutPhoneFallback(strippedJobs);
+  }
   if (!first.error || !isMissingCustomerPhoneColumn(first.error)) return first;
 
+  const stripped = rows.map(({ customer_phone: _phone, ...rest }) => rest);
+  return supabase.from("cloths").insert(stripped).select("*");
+}
+
+async function insertClothRowsWithoutPhoneFallback(rows: Omit<ReturnType<typeof toClothInsertRow>, "staff_jobs">[]) {
+  const first = await supabase.from("cloths").insert(rows).select("*");
+  if (!first.error || !isMissingCustomerPhoneColumn(first.error)) return first;
   const stripped = rows.map(({ customer_phone: _phone, ...rest }) => rest);
   return supabase.from("cloths").insert(stripped).select("*");
 }
@@ -338,11 +360,8 @@ export async function updateClothMeasurements(
       size: input.size,
       measurements: input.measurements,
       measurement_checks: measurementChecksPayload({
+        ...checks,
         inGroup: input.inGroup,
-        partPayments: checks.partPayments,
-        advanceDate: checks.advanceDate,
-        finalPaymentDate: checks.finalPaymentDate,
-        deliveryDate: checks.deliveryDate,
       }),
       measurement_image: null,
     })
@@ -366,6 +385,33 @@ export async function updateClothSize(id: string, size: string) {
   return mapCloth(data);
 }
 
+export async function updateClothCustomerPhone(ids: string[], customerPhone: string) {
+  if (ids.length === 0) return [];
+  const first = await supabase
+    .from("cloths")
+    .update({ customer_phone: customerPhone })
+    .in("id", ids)
+    .select("*");
+  if (!first.error) return (first.data ?? []).map(mapCloth);
+  if (!isMissingCustomerPhoneColumn(first.error)) throw first.error;
+
+  const updated: Cloth[] = [];
+  for (const id of ids) {
+    const checks = await readMeasurementChecks(id);
+    const { data, error } = await supabase
+      .from("cloths")
+      .update({
+        measurement_checks: measurementChecksPayload({ ...checks, customerPhone }),
+      })
+      .eq("id", id)
+      .select("*")
+      .single();
+    if (error) throw error;
+    updated.push(mapCloth(data));
+  }
+  return updated;
+}
+
 export async function updateClothPayments(
   id: string,
   input: {
@@ -387,11 +433,10 @@ export async function updateClothPayments(
       advance_amount: input.advanceAmount,
       final_payment_amount: input.finalPaymentAmount,
       measurement_checks: measurementChecksPayload({
-        inGroup: checks.inGroup,
+        ...checks,
         partPayments: input.partPayments,
         advanceDate: input.advanceDate ?? checks.advanceDate,
         finalPaymentDate: input.finalPaymentDate ?? checks.finalPaymentDate,
-        deliveryDate: checks.deliveryDate,
       }),
     })
     .eq("id", id)
@@ -419,10 +464,7 @@ export async function updateClothDates(
       cutter_expected_date: input.cutterExpectedDate,
       tailor_expected_date: input.tailorExpectedDate,
       measurement_checks: measurementChecksPayload({
-        inGroup: checks.inGroup,
-        partPayments: checks.partPayments,
-        advanceDate: checks.advanceDate,
-        finalPaymentDate: checks.finalPaymentDate,
+        ...checks,
         deliveryDate: input.deliveryDate ?? checks.deliveryDate,
       }),
     })
@@ -447,6 +489,37 @@ export async function updateClothStaffPayments(
 
   if (error) throw error;
   return mapCloth(data);
+}
+
+export async function writeStaffJobs(id: string, jobs: ClothStaffJob[]) {
+  const checks = await readMeasurementChecks(id);
+  const columns = applyLegacyPayColumns(jobs);
+  const row: ClothUpdate = {
+    cutter_id: columns.cutterId,
+    tailor_id: columns.tailorId,
+    cutter_pay_amount: columns.cutterPayAmount,
+    cutter_pay_advance: columns.cutterPayAdvance,
+    cutter_pay_final: columns.cutterPayFinal,
+    cutter_pay_remarks: columns.cutterPayRemarks,
+    tailor_pay_amount: columns.tailorPayAmount,
+    tailor_pay_advance: columns.tailorPayAdvance,
+    tailor_pay_final: columns.tailorPayFinal,
+    tailor_pay_remarks: columns.tailorPayRemarks,
+    measurement_checks: measurementChecksPayload({
+      ...checks,
+      staffJobs: jobs,
+    }),
+    staff_jobs: jobs as unknown as Json,
+  };
+  const first = await supabase.from("cloths").update(row).eq("id", id).select("*").single();
+  if (first.error && /staff_jobs/i.test(first.error.message)) {
+    const { staff_jobs: _jobs, ...rest } = row;
+    const retry = await supabase.from("cloths").update(rest).eq("id", id).select("*").single();
+    if (retry.error) throw retry.error;
+    return mapCloth(retry.data);
+  }
+  if (first.error) throw first.error;
+  return mapCloth(first.data);
 }
 
 export async function getClothByCode(code: string) {

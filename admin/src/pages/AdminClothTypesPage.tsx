@@ -1,6 +1,7 @@
-import { useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { Pencil, Plus, Trash2 } from 'lucide-react';
 import { useGarmentCatalog } from '@app/contexts/GarmentCatalogContext';
+import { useStaffTypes } from '@app/contexts/StaffTypesContext';
 import {
   addGarmentSizeField,
   createGarmentType,
@@ -8,6 +9,7 @@ import {
   fieldKeyFromLabel,
   removeGarmentSizeField,
   updateGarmentSizeField,
+  updateGarmentType,
 } from '@app/lib/garment-catalog-db';
 import {
   GARMENT_GENDER_LABELS,
@@ -175,10 +177,13 @@ function SizeDraftEditor({
 
 export function AdminClothTypesPage() {
   const { catalog, loading, dbBacked, error, reload, initialize } = useGarmentCatalog();
+  const { types: staffTypes } = useStaffTypes();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [typeLabel, setTypeLabel] = useState('');
   const [typeGender, setTypeGender] = useState<GarmentGender>('male');
   const [newSizes, setNewSizes] = useState<SizeDraft[]>([emptySizeDraft()]);
+  const [newTypeRates, setNewTypeRates] = useState<Record<string, string>>({});
+  const [rateDraft, setRateDraft] = useState<Record<string, string>>({});
   const [addSizeDraft, setAddSizeDraft] = useState<SizeDraft>(emptySizeDraft());
   const [editingFieldId, setEditingFieldId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState<SizeDraft>(emptySizeDraft());
@@ -189,6 +194,18 @@ export function AdminClothTypesPage() {
     () => catalog.find((item) => item.id === selectedId) ?? catalog[0] ?? null,
     [catalog, selectedId],
   );
+
+  useEffect(() => {
+    if (!selected) {
+      setRateDraft({});
+      return;
+    }
+    setRateDraft(
+      Object.fromEntries(
+        staffTypes.map((item) => [item.slug, selected.staffRates?.[item.slug] ? String(selected.staffRates[item.slug]) : '']),
+      ),
+    );
+  }, [selected?.id, selected?.staffRates, staffTypes]);
 
   const setupNeeded = !dbBacked;
 
@@ -228,9 +245,13 @@ export function AdminClothTypesPage() {
         label: typeLabel.trim(),
         gender: typeGender,
         fields,
+        staffRates: Object.fromEntries(
+          staffTypes.map((item) => [item.slug, Number(newTypeRates[item.slug]) || 0]),
+        ),
       });
       setTypeLabel('');
       setNewSizes([emptySizeDraft()]);
+      setNewTypeRates({});
       await reload();
       setSelectedId(created.id);
     } catch (err) {
@@ -252,6 +273,31 @@ export function AdminClothTypesPage() {
       await reload();
     } catch (err) {
       setActionError(err instanceof Error ? err.message : 'Failed to delete cloth type');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleSaveRates(event: FormEvent) {
+    event.preventDefault();
+    if (!selected?.dbId) return;
+    setBusy(true);
+    setActionError(null);
+    try {
+      const saved = await updateGarmentType(selected.dbId, {
+        staffRates: Object.fromEntries(
+          staffTypes.map((item) => [item.slug, Number(rateDraft[item.slug]) || 0]),
+        ),
+      });
+      const missing = staffTypes.some(
+        (item) => (Number(rateDraft[item.slug]) || 0) > 0 && !(saved.staffRates?.[item.slug]),
+      );
+      if (missing) {
+        throw new Error('Staff rates did not save. Try Save staff rates again.');
+      }
+      await reload();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Failed to save staff rates');
     } finally {
       setBusy(false);
     }
@@ -410,6 +456,25 @@ export function AdminClothTypesPage() {
               <option value="female">Female</option>
             </Select>
           </div>
+          {staffTypes.length > 0 && (
+            <div className="grid gap-3 sm:grid-cols-2">
+              {staffTypes.map((item) => (
+                <Input
+                  key={item.slug}
+                  label={`${item.label} pay (₹ / piece)`}
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={newTypeRates[item.slug] ?? ''}
+                  onChange={(e) =>
+                    setNewTypeRates((current) => ({ ...current, [item.slug]: e.target.value }))
+                  }
+                  placeholder="0"
+                  disabled={setupNeeded}
+                />
+              ))}
+            </div>
+          )}
 
           <div className="space-y-2">
             <p className="text-sm font-medium text-slate-700">Sizes / measurements (optional)</p>
@@ -511,6 +576,32 @@ export function AdminClothTypesPage() {
                   Delete
                 </button>
               </div>
+
+              {staffTypes.length > 0 && (
+                <form onSubmit={(event) => void handleSaveRates(event)} className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                  <p className="text-sm font-semibold text-slate-800">Staff pay per piece</p>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    {staffTypes.map((item) => (
+                      <Input
+                        key={item.slug}
+                        label={`${item.label} (₹)`}
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={rateDraft[item.slug] ?? ''}
+                        onChange={(e) =>
+                          setRateDraft((current) => ({ ...current, [item.slug]: e.target.value }))
+                        }
+                        placeholder="0"
+                        disabled={setupNeeded || !selected.dbId}
+                      />
+                    ))}
+                  </div>
+                  <Button type="submit" disabled={busy || setupNeeded || !selected.dbId} className="rounded-lg px-4">
+                    Save staff rates
+                  </Button>
+                </form>
+              )}
 
               <form onSubmit={handleAddSize} className="space-y-3">
                 <SizeDraftEditor

@@ -8,7 +8,13 @@ export function parseStaffPayouts(value: unknown): StaffPayout[] {
   return value
     .map((item) => {
       if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
-      const record = item as { id?: unknown; amount?: unknown; date?: unknown; note?: unknown };
+      const record = item as {
+        id?: unknown;
+        amount?: unknown;
+        date?: unknown;
+        note?: unknown;
+        clothIds?: unknown;
+      };
       const amount = Number(record.amount);
       if (!Number.isFinite(amount) || amount <= 0) return null;
       const payout: StaffPayout = {
@@ -18,6 +24,9 @@ export function parseStaffPayouts(value: unknown): StaffPayout[] {
       };
       if (typeof record.note === 'string' && record.note.trim()) {
         payout.note = record.note.trim();
+      }
+      if (Array.isArray(record.clothIds)) {
+        payout.clothIds = record.clothIds.filter((id): id is string => typeof id === 'string' && Boolean(id));
       }
       return payout;
     })

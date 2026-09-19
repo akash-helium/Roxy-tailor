@@ -1,6 +1,6 @@
 import { useMemo, useState, type FormEvent } from 'react';
 import { CheckCircle2, Circle, Plus, Printer, Receipt, Search, Settings2, Trash2, UserCog } from 'lucide-react';
-import { assignCutter, assignTailor, deleteCloths, getStaffById, registerClothOrder, setClothDone } from '../lib/data';
+import { assignCutter, assignStaffJob, assignTailor, deleteCloths, getStaffById, registerClothOrder, setClothDone } from '../lib/data';
 import { useClothList } from '../hooks/useClothList';
 import {
   CLOTH_FILTER_OPTIONS,
@@ -24,8 +24,14 @@ import type { MeasurementData } from '../lib/measurements';
 import { Badge, Button, Card, Input, Modal, PageHeader, Select, Textarea } from '../components/ui';
 import { garmentDisplayLabel, getGarmentType } from '../lib/garments';
 import { formatMeasurementsSummary } from '../lib/measurements';
-import { findCustomerByPhone, findKnownCustomer, latestSizingForCustomer, listKnownCustomers } from '../lib/customer-history';
-import { openWhatsAppPlaceholder, sendOrderConfirmationWhatsApp, normalizeCustomerPhone } from '../lib/whatsapp';
+import { findCustomerByPhone, findKnownCustomer, latestSizingForCustomer, listKnownCustomers, suggestCustomersByPhone } from '../lib/customer-history';
+import { emptyStaffJob, staffRateForGarment } from '../lib/staff-jobs';
+import { useStaffTypes } from '../contexts/StaffTypesContext';
+import {
+  normalizeCustomerPhone,
+  openWhatsAppPlaceholder,
+  sendOrderConfirmationWhatsApp,
+} from '../lib/whatsapp';
 
 type ClothLineItem = {
   id: string;
@@ -37,6 +43,7 @@ type ClothLineItem = {
   tailorExpectedDate: string;
   cutterPayAmount: string;
   tailorPayAmount: string;
+  extraStaff: Record<string, { staffId: string; payAmount: string }>;
 };
 
 function newClothLineItem(
@@ -50,6 +57,7 @@ function newClothLineItem(
       | 'tailorExpectedDate'
       | 'cutterPayAmount'
       | 'tailorPayAmount'
+      | 'extraStaff'
     >
   >,
 ): ClothLineItem {
@@ -63,6 +71,7 @@ function newClothLineItem(
     tailorExpectedDate: defaults?.tailorExpectedDate ?? '',
     cutterPayAmount: defaults?.cutterPayAmount ?? '',
     tailorPayAmount: defaults?.tailorPayAmount ?? '',
+    extraStaff: defaults?.extraStaff ?? {},
   };
 }
 
@@ -131,6 +140,8 @@ function ClothListItem({
   const tailorOverdue =
     cloth.status === 'sewing' && isPastDue(cloth.tailorExpectedDate, false);
 
+  const { types: staffRoleTypes, getLabel: staffTypeLabel } = useStaffTypes();
+  const extraStaffTypes = staffRoleTypes.filter((item) => item.slug !== 'cutter' && item.slug !== 'tailor');
   const cutters = staff.filter((m) => m.type === 'cutter');
   const tailors = staff.filter((m) => m.type === 'tailor');
   const [assignOpen, setAssignOpen] = useState(false);
@@ -167,6 +178,19 @@ function ClothListItem({
       await onAssigned();
     } catch (err) {
       setAssignError(err instanceof Error ? err.message : 'Failed to assign tailor');
+    } finally {
+      setAssigning(false);
+    }
+  }
+
+  async function handleAssignExtra(piece: Cloth, type: string, value: string) {
+    setAssigning(true);
+    setAssignError(null);
+    try {
+      await assignStaffJob(piece, type, value || null);
+      await onAssigned();
+    } catch (err) {
+      setAssignError(err instanceof Error ? err.message : 'Failed to assign staff');
     } finally {
       setAssigning(false);
     }
@@ -385,6 +409,28 @@ function ClothListItem({
                   </option>
                 ))}
               </Select>
+              {extraStaffTypes.map((role) => {
+                const members = staff.filter((member) => member.type === role.slug);
+                if (members.length === 0) return null;
+                const current =
+                  (piece.staffJobs ?? []).find((job) => job.type === role.slug)?.staffId ?? '';
+                return (
+                  <Select
+                    key={role.slug}
+                    label={role.label}
+                    value={current}
+                    disabled={assigning}
+                    onChange={(e) => void handleAssignExtra(piece, role.slug, e.target.value)}
+                  >
+                    <option value="">No {staffTypeLabel(role.slug).toLowerCase()}</option>
+                    {members.map((member) => (
+                      <option key={member.id} value={member.id}>
+                        {member.name}
+                      </option>
+                    ))}
+                  </Select>
+                );
+              })}
             </div>
           ))}
           <p className="text-[10px] text-slate-500">
@@ -423,14 +469,21 @@ export function OrdersPage() {
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [phoneSuggestOpen, setPhoneSuggestOpen] = useState(false);
 
+  const { types: staffRoleTypes, getLabel: staffTypeLabel } = useStaffTypes();
+  const extraStaffTypes = staffRoleTypes.filter((item) => item.slug !== 'cutter' && item.slug !== 'tailor');
   const cutters = staff.filter((member) => member.type === 'cutter');
   const tailors = staff.filter((member) => member.type === 'tailor');
   const hasStaff = staff.length > 0;
   const knownCustomers = useMemo(() => listKnownCustomers(allCloths), [allCloths]);
+  const phoneSuggestions = useMemo(
+    () => suggestCustomersByPhone(allCloths, form.customerPhone),
+    [allCloths, form.customerPhone],
+  );
   const matchedCustomer =
-    findKnownCustomer(allCloths, form.customerName) ??
-    findCustomerByPhone(allCloths, form.customerPhone);
+    findCustomerByPhone(allCloths, form.customerPhone) ??
+    findKnownCustomer(allCloths, form.customerName);
 
   function applyCustomerDetails(name: string, phone = form.customerPhone) {
     const known = findKnownCustomer(allCloths, name);
@@ -502,6 +555,7 @@ export function OrdersPage() {
 
     const whatsappPopup = phoneResult.phone ? openWhatsAppPlaceholder() : null;
 
+    const orderBatchId = crypto.randomUUID();
     try {
       const payloads = [];
       for (const item of form.items) {
@@ -523,8 +577,37 @@ export function OrdersPage() {
             notes: form.notes,
             cutterId: item.cutterId.trim() || null,
             tailorId: item.tailorId.trim() || null,
-            cutterPayAmount: item.cutterId.trim() ? parseAmount(item.cutterPayAmount) : 0,
-            tailorPayAmount: item.tailorId.trim() ? parseAmount(item.tailorPayAmount) : 0,
+            cutterPayAmount: item.cutterId.trim()
+              ? parseAmount(item.cutterPayAmount) || staffRateForGarment(item.sizing.garmentType, 'cutter')
+              : 0,
+            tailorPayAmount: item.tailorId.trim()
+              ? parseAmount(item.tailorPayAmount) || staffRateForGarment(item.sizing.garmentType, 'tailor')
+              : 0,
+            staffJobs: [
+              item.cutterId.trim()
+                ? emptyStaffJob(
+                    'cutter',
+                    item.cutterId,
+                    parseAmount(item.cutterPayAmount) || staffRateForGarment(item.sizing.garmentType, 'cutter'),
+                  )
+                : null,
+              item.tailorId.trim()
+                ? emptyStaffJob(
+                    'tailor',
+                    item.tailorId,
+                    parseAmount(item.tailorPayAmount) || staffRateForGarment(item.sizing.garmentType, 'tailor'),
+                  )
+                : null,
+              ...Object.entries(item.extraStaff ?? {}).map(([type, slot]) =>
+                slot.staffId
+                  ? emptyStaffJob(
+                      type,
+                      slot.staffId,
+                      parseAmount(slot.payAmount) || staffRateForGarment(item.sizing.garmentType, type),
+                    )
+                  : null,
+              ),
+            ].filter((job): job is NonNullable<typeof job> => Boolean(job)),
             totalAmount: perTotal,
             discountAmount: perDiscount,
             advanceAmount: perAdvance,
@@ -532,6 +615,7 @@ export function OrdersPage() {
             deliveryDate: form.deliveryDate.trim() || null,
             cutterExpectedDate: item.cutterExpectedDate.trim() || null,
             tailorExpectedDate: item.tailorExpectedDate.trim() || null,
+            orderBatchId,
           });
         }
       }
@@ -724,37 +808,64 @@ export function OrdersPage() {
                 const name = e.target.value;
                 const known = findKnownCustomer(allCloths, name);
                 if (known) {
-                  applyCustomerDetails(known.name, form.customerPhone);
+                  applyCustomerDetails(known.name, known.phone || form.customerPhone);
                   return;
                 }
                 setForm({ ...form, customerName: name });
               }}
               onBlur={(e) => {
                 const known = findKnownCustomer(allCloths, e.target.value);
-                if (known) applyCustomerDetails(known.name, form.customerPhone);
+                if (known) applyCustomerDetails(known.name, known.phone || form.customerPhone);
               }}
               list="known-customers"
               placeholder="Customer name"
               autoComplete="off"
               required
             />
-            <Input
-              label="Mobile number"
-              type="tel"
-              inputMode="numeric"
-              autoComplete="tel"
-              value={form.customerPhone}
-              onChange={(e) => {
-                const phone = e.target.value;
-                const known = findCustomerByPhone(allCloths, phone);
-                if (known && !form.customerName.trim()) {
-                  applyCustomerDetails(known.name, phone);
-                  return;
-                }
-                setForm({ ...form, customerPhone: phone });
-              }}
-              placeholder="9876543210"
-            />
+            <div className="relative">
+              <Input
+                label="Mobile number"
+                type="tel"
+                inputMode="numeric"
+                autoComplete="off"
+                value={form.customerPhone}
+                onChange={(e) => {
+                  const phone = e.target.value;
+                  setPhoneSuggestOpen(true);
+                  const known = findCustomerByPhone(allCloths, phone);
+                  if (known) {
+                    applyCustomerDetails(known.name, known.phone);
+                    return;
+                  }
+                  setForm({ ...form, customerPhone: phone });
+                }}
+                onFocus={() => setPhoneSuggestOpen(true)}
+                onBlur={() => {
+                  window.setTimeout(() => setPhoneSuggestOpen(false), 180);
+                }}
+                placeholder="9876543210"
+              />
+              {phoneSuggestOpen && phoneSuggestions.length > 0 && (
+                <ul className="absolute z-30 mt-1 max-h-48 w-full overflow-y-auto rounded-xl border border-slate-200 bg-white py-1 shadow-lg">
+                  {phoneSuggestions.map((customer) => (
+                    <li key={`${customer.phone}-${customer.name}`}>
+                      <button
+                        type="button"
+                        className="flex w-full flex-col items-start px-3 py-2 text-left hover:bg-indigo-50"
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => {
+                          applyCustomerDetails(customer.name, customer.phone);
+                          setPhoneSuggestOpen(false);
+                        }}
+                      >
+                        <span className="text-sm font-semibold text-slate-800">{customer.name}</span>
+                        <span className="font-mono text-xs text-slate-500">{customer.phone}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
           </div>
           <datalist id="known-customers">
             {knownCustomers.map((customer) => (
@@ -764,14 +875,14 @@ export function OrdersPage() {
             ))}
           </datalist>
           <p className="-mt-2 text-xs text-slate-500">
-            Optional. Leave empty if the customer has no number. If entered, it must be a valid 10-digit
-            mobile. After save, WhatsApp opens only when a number is given.
+            Type a mobile number to pick an existing customer. A new save always creates a new order —
+            it does not change their previous order.
           </p>
           {matchedCustomer ? (
             <p className="-mt-2 text-xs font-medium text-indigo-600">
               Existing customer: {matchedCustomer.name}
-              {matchedCustomer.phone ? ` · ${matchedCustomer.phone}` : ''}. Pick a cloth type to fill
-              last saved sizes.
+              {matchedCustomer.phone ? ` · ${matchedCustomer.phone}` : ''}. Select a cloth type to fill
+              last saved sizes, then save to create a new order.
             </p>
           ) : null}
 
@@ -825,9 +936,32 @@ export function OrdersPage() {
                     onChange={(sizing) =>
                       setForm({
                         ...form,
-                        items: form.items.map((row) =>
-                          row.id === item.id ? { ...row, sizing } : row,
-                        ),
+                        items: form.items.map((row) => {
+                          if (row.id !== item.id) return row;
+                          const typeChanged = row.sizing.garmentType !== sizing.garmentType;
+                          if (!typeChanged) return { ...row, sizing };
+                          return {
+                            ...row,
+                            sizing,
+                            cutterPayAmount: row.cutterId
+                              ? String(staffRateForGarment(sizing.garmentType, 'cutter') || '')
+                              : '',
+                            tailorPayAmount: row.tailorId
+                              ? String(staffRateForGarment(sizing.garmentType, 'tailor') || '')
+                              : '',
+                            extraStaff: Object.fromEntries(
+                              Object.entries(row.extraStaff ?? {}).map(([type, slot]) => [
+                                type,
+                                {
+                                  ...slot,
+                                  payAmount: slot.staffId
+                                    ? String(staffRateForGarment(sizing.garmentType, type) || '')
+                                    : '',
+                                },
+                              ]),
+                            ),
+                          };
+                        }),
                       })
                     }
                     afterClothType={
@@ -868,7 +1002,15 @@ export function OrdersPage() {
                               setForm({
                                 ...form,
                                 items: form.items.map((row) =>
-                                  row.id === item.id ? { ...row, cutterId: e.target.value } : row,
+                                  row.id === item.id
+                                    ? {
+                                        ...row,
+                                        cutterId: e.target.value,
+                                        cutterPayAmount: e.target.value
+                                          ? String(staffRateForGarment(item.sizing.garmentType, 'cutter') || row.cutterPayAmount)
+                                          : '',
+                                      }
+                                    : row,
                                 ),
                               })
                             }
@@ -886,22 +1028,16 @@ export function OrdersPage() {
                           </p>
                         )}
                         {item.cutterId ? (
-                          <Input
-                            label={cutterName ? `Pay ${cutterName} (₹)` : 'Cutter pay (₹)'}
-                            type="number"
-                            min="0"
-                            step="0.01"
-                            value={item.cutterPayAmount}
-                            onChange={(e) =>
-                              setForm({
-                                ...form,
-                                items: form.items.map((row) =>
-                                  row.id === item.id ? { ...row, cutterPayAmount: e.target.value } : row,
-                                ),
-                              })
-                            }
-                            placeholder="0"
-                          />
+                          <p className="self-end pb-3 text-xs font-medium text-slate-600">
+                            {cutterName ? `${cutterName}: ` : 'Cutter: '}
+                            {formatCurrency(parseAmount(item.cutterPayAmount) || staffRateForGarment(item.sizing.garmentType, 'cutter'))}{' '}
+                            × {parseLineQuantity(item.quantity)} ={' '}
+                            {formatCurrency(
+                              (parseAmount(item.cutterPayAmount) ||
+                                staffRateForGarment(item.sizing.garmentType, 'cutter')) *
+                                parseLineQuantity(item.quantity),
+                            )}
+                          </p>
                         ) : cutters.length > 0 ? (
                           <p className="self-end pb-2 text-xs text-slate-400">
                             Assign cutter to set payout
@@ -915,7 +1051,15 @@ export function OrdersPage() {
                               setForm({
                                 ...form,
                                 items: form.items.map((row) =>
-                                  row.id === item.id ? { ...row, tailorId: e.target.value } : row,
+                                  row.id === item.id
+                                    ? {
+                                        ...row,
+                                        tailorId: e.target.value,
+                                        tailorPayAmount: e.target.value
+                                          ? String(staffRateForGarment(item.sizing.garmentType, 'tailor') || row.tailorPayAmount)
+                                          : '',
+                                      }
+                                    : row,
                                 ),
                               })
                             }
@@ -929,22 +1073,16 @@ export function OrdersPage() {
                           </Select>
                         ) : null}
                         {item.tailorId ? (
-                          <Input
-                            label={tailorName ? `Pay ${tailorName} (₹)` : 'Tailor pay (₹)'}
-                            type="number"
-                            min="0"
-                            step="0.01"
-                            value={item.tailorPayAmount}
-                            onChange={(e) =>
-                              setForm({
-                                ...form,
-                                items: form.items.map((row) =>
-                                  row.id === item.id ? { ...row, tailorPayAmount: e.target.value } : row,
-                                ),
-                              })
-                            }
-                            placeholder="0"
-                          />
+                          <p className="self-end pb-3 text-xs font-medium text-slate-600">
+                            {tailorName ? `${tailorName}: ` : 'Tailor: '}
+                            {formatCurrency(parseAmount(item.tailorPayAmount) || staffRateForGarment(item.sizing.garmentType, 'tailor'))}{' '}
+                            × {parseLineQuantity(item.quantity)} ={' '}
+                            {formatCurrency(
+                              (parseAmount(item.tailorPayAmount) ||
+                                staffRateForGarment(item.sizing.garmentType, 'tailor')) *
+                                parseLineQuantity(item.quantity),
+                            )}
+                          </p>
                         ) : tailors.length > 0 ? (
                           <p className="self-end pb-2 text-xs text-slate-400">
                             Assign tailor to set payout
@@ -977,6 +1115,60 @@ export function OrdersPage() {
                           }
                           min={todayDateString()}
                         />
+                        {extraStaffTypes.map((role) => {
+                          const members = staff.filter((member) => member.type === role.slug);
+                          if (members.length === 0) return null;
+                          const slot = item.extraStaff?.[role.slug] ?? { staffId: '', payAmount: '' };
+                          const qty = parseLineQuantity(item.quantity);
+                          const rate =
+                            parseAmount(slot.payAmount) ||
+                            staffRateForGarment(item.sizing.garmentType, role.slug);
+                          return (
+                            <div key={role.slug} className="col-span-2 grid grid-cols-2 gap-3">
+                              <Select
+                                label={role.label}
+                                value={slot.staffId}
+                                onChange={(e) =>
+                                  setForm({
+                                    ...form,
+                                    items: form.items.map((row) =>
+                                      row.id === item.id
+                                        ? {
+                                            ...row,
+                                            extraStaff: {
+                                              ...(row.extraStaff ?? {}),
+                                              [role.slug]: {
+                                                staffId: e.target.value,
+                                                payAmount: e.target.value
+                                                  ? String(staffRateForGarment(item.sizing.garmentType, role.slug))
+                                                  : '',
+                                              },
+                                            },
+                                          }
+                                        : row,
+                                    ),
+                                  })
+                                }
+                              >
+                                <option value="">Assign later</option>
+                                {members.map((member) => (
+                                  <option key={member.id} value={member.id}>
+                                    {member.name}
+                                  </option>
+                                ))}
+                              </Select>
+                              {slot.staffId ? (
+                                <p className="self-end pb-3 text-xs font-medium text-slate-600">
+                                  {formatCurrency(rate)} × {qty} = {formatCurrency(rate * qty)}
+                                </p>
+                              ) : (
+                                <p className="self-end pb-2 text-xs text-slate-400">
+                                  Assign {staffTypeLabel(role.slug).toLowerCase()} to set payout
+                                </p>
+                              )}
+                            </div>
+                          );
+                        })}
                       </div>
                     )}
                   </div>
@@ -1002,6 +1194,7 @@ export function OrdersPage() {
                       tailorExpectedDate: last?.tailorExpectedDate,
                       cutterPayAmount: last?.cutterPayAmount,
                       tailorPayAmount: last?.tailorPayAmount,
+                      extraStaff: last?.extraStaff,
                     }),
                   ],
                 });

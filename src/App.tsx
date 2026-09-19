@@ -4,6 +4,7 @@ import { GarmentCatalogProvider } from './contexts/GarmentCatalogContext';
 import { StaffTypesProvider } from './contexts/StaffTypesContext';
 import { HardwareScannerProvider } from './contexts/HardwareScannerContext';
 import { CloudBootstrap } from './components/CloudBootstrap';
+import { ToastHost } from './components/ui';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { AppErrorBoundary } from './components/AppErrorBoundary';
 import { MobileLayout } from './layouts/MobileLayout';
@@ -54,6 +55,7 @@ function App() {
                 <AppRoutes />
               </Router>
             </div>
+            <ToastHost />
           </StaffTypesProvider>
         </GarmentCatalogProvider>
       </AuthProvider>

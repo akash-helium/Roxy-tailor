@@ -1,5 +1,5 @@
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
-import { LogOut, ScanBarcode, ScanLine, Shirt, Users } from 'lucide-react';
+import { LogOut, ScanLine, Shirt, Users } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { APP_NAME } from '../lib/app-config';
@@ -65,12 +65,12 @@ export function DesktopLayout() {
         </nav>
 
         {scannerReady && (
-          <div className="mx-3 mb-2 flex items-center gap-2 rounded-lg border border-indigo-100 bg-indigo-50/80 px-3 py-2">
-            <ScanBarcode className="h-4 w-4 shrink-0 text-indigo-600" />
-            <p className="text-[11px] leading-tight text-indigo-800">
-              <span className="font-semibold">Scanner ready</span>
-              <span className="block text-indigo-600/80">Scan anywhere — USB dongle plugged in</span>
-            </p>
+          <div className="mx-3 mb-2 flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2">
+            <span className="relative flex h-2.5 w-2.5 shrink-0">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
+              <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500" />
+            </span>
+            <p className="text-xs font-semibold text-emerald-900">Barcode connected</p>
           </div>
         )}
 

@@ -1,6 +1,7 @@
 import type { Cloth, ClothStatus, Staff, StaffType } from '../types';
 import type { Database } from '../types/database';
 import { parseJsonRecord, parseMeasurementChecks } from './measurements';
+import { parseClothStaffJobs, jobsFromLegacyColumns } from './staff-jobs';
 import { parseStaffPayouts, splitStaffNotes } from './staff-payouts';
 
 type StaffRow = Database['public']['Tables']['staff']['Row'] & { payouts?: unknown };
@@ -25,7 +26,7 @@ export function mapCloth(row: ClothRow): Cloth {
     id: row.id,
     code: row.code,
     customerName: row.customer_name,
-    customerPhone: row.customer_phone ?? '',
+    customerPhone: (row.customer_phone ?? '').trim() || checks.customerPhone || '',
     garment: row.garment,
     garmentType: row.garment_type ?? '',
     gender: (row.gender === 'female' ? 'female' : 'male') as Cloth['gender'],
@@ -33,6 +34,25 @@ export function mapCloth(row: ClothRow): Cloth {
     size: row.size ?? '',
     measurements: parseJsonRecord<Record<string, string>>(row.measurements, {}),
     inGroup: checks.inGroup,
+    orderBatchId: checks.orderBatchId,
+    staffJobs: (() => {
+      const fromChecks = checks.staffJobs;
+      const fromColumn = parseClothStaffJobs(row.staff_jobs);
+      const merged = fromColumn.length > 0 ? fromColumn : fromChecks;
+      return jobsFromLegacyColumns({
+        cutterId: row.cutter_id,
+        tailorId: row.tailor_id,
+        cutterPayAmount: Number(row.cutter_pay_amount ?? 0),
+        cutterPayAdvance: Number(row.cutter_pay_advance ?? 0),
+        cutterPayFinal: Number(row.cutter_pay_final ?? 0),
+        cutterPayRemarks: row.cutter_pay_remarks ?? '',
+        tailorPayAmount: Number(row.tailor_pay_amount ?? 0),
+        tailorPayAdvance: Number(row.tailor_pay_advance ?? 0),
+        tailorPayFinal: Number(row.tailor_pay_final ?? 0),
+        tailorPayRemarks: row.tailor_pay_remarks ?? '',
+        staffJobs: merged,
+      });
+    })(),
     notes: row.notes,
     status: row.status as ClothStatus,
     cutterId: row.cutter_id,

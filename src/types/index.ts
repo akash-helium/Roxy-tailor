@@ -22,6 +22,16 @@ export interface StaffPayout {
   amount: number;
   date: string;
   note?: string;
+  clothIds?: string[];
+}
+
+export interface ClothStaffJob {
+  type: string;
+  staffId: string;
+  amount: number;
+  advance: number;
+  final: number;
+  remarks: string;
 }
 
 export interface DatedAmount {
@@ -50,6 +60,8 @@ export interface Cloth {
   size: string;
   measurements: Record<string, string>;
   inGroup: boolean;
+  orderBatchId: string;
+  staffJobs: ClothStaffJob[];
   notes: string;
   status: ClothStatus;
   cutterId: string | null;

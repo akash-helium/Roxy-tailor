@@ -84,13 +84,18 @@ export function CustomerBillPrintSheet({
     };
   }, [sorted]);
 
+  const printBillHtmlDoc = useMemo(() => {
+    if (barcodes.length === 0) return null;
+    return buildCustomerBillHtml(sorted, barcodes, new Date(), logoDataUrl, { copies: 2 });
+  }, [sorted, barcodes, logoDataUrl]);
+
   const billHtml = useMemo(() => {
     if (barcodes.length === 0) return null;
     return buildCustomerBillHtml(sorted, barcodes, new Date(), logoDataUrl);
   }, [sorted, barcodes, logoDataUrl]);
 
   async function handlePrint() {
-    if (!billHtml || printingRef.current) return;
+    if (!printBillHtmlDoc || printingRef.current) return;
     printingRef.current = true;
     setBusy(true);
     setStatus(null);
@@ -98,7 +103,7 @@ export function CustomerBillPrintSheet({
     try {
       if (native) {
         const result = await exportBillForNative(
-          billHtml,
+          printBillHtmlDoc,
           summary.customerName,
           "print",
         );
@@ -112,14 +117,15 @@ export function CustomerBillPrintSheet({
           barcodeValue: summary.codes[0] ?? "Order",
           lines: buildCustomerBillTicketLines(sorted),
           footer: BILL_POLICY_NOTE,
+          copies: 2,
         });
         if (result.ok) {
-          setStatus(result.message);
+          setStatus("Printed");
           return;
         }
         setStatus(`${result.message}. Opening Windows print…`);
       }
-      printBillHtml(billHtml, `Bill ${summary.codes.join(", ")}`);
+      printBillHtml(printBillHtmlDoc, `Bill ${summary.codes.join(", ")}`);
       setStatus((prev) => prev ?? "Printed");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not print bill");
@@ -367,11 +373,7 @@ export function CustomerBillPrintSheet({
             className="w-full rounded-full py-4"
           >
             <Printer className="h-5 w-5" />
-            {busy
-              ? "Please wait…"
-              : native
-                ? "Print Bill (Share menu)"
-                : "Print Bill"}
+            {busy ? "Please wait…" : "Print Bill"}
           </Button>
           <Button
             variant="secondary"

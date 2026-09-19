@@ -20,6 +20,8 @@ export type GarmentType = {
   label: string;
   gender: GarmentGender;
   fields: MeasurementField[];
+  /** Per-piece pay by staff type slug */
+  staffRates?: Record<string, number>;
   /** Supabase row id (admin catalog only) */
   dbId?: string;
 };

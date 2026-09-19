@@ -103,6 +103,7 @@ export interface Database {
           expected_date?: string | null;
           created_at: string;
           updated_at: string;
+          staff_jobs?: Json;
         };
         Insert: {
           id?: string;
@@ -140,6 +141,7 @@ export interface Database {
           expected_date?: string | null;
           created_at?: string;
           updated_at?: string;
+          staff_jobs?: Json;
         };
         Update: {
           id?: string;
@@ -177,6 +179,7 @@ export interface Database {
           expected_date?: string | null;
           created_at?: string;
           updated_at?: string;
+          staff_jobs?: Json;
         };
         Relationships: [];
       };
@@ -190,6 +193,7 @@ export interface Database {
           fields: Json;
           sort_order: number;
           created_at: string;
+          staff_rates?: Json;
         };
         Insert: {
           id?: string;
@@ -200,6 +204,7 @@ export interface Database {
           fields?: Json;
           sort_order?: number;
           created_at?: string;
+          staff_rates?: Json;
         };
         Update: {
           id?: string;
@@ -210,6 +215,7 @@ export interface Database {
           fields?: Json;
           sort_order?: number;
           created_at?: string;
+          staff_rates?: Json;
         };
         Relationships: [];
       };

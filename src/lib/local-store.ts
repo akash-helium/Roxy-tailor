@@ -1,6 +1,7 @@
 import type { AppData, Cloth, ClothStatus, DatedAmount, Staff, StaffPayout, StaffType } from "../types";
 import { generateId, nextClothCodes } from "./utils";
 import { parseDatedAmounts } from "./measurements";
+import { parseClothStaffJobs, applyLegacyPayColumns, jobsFromLegacyColumns } from "./staff-jobs";
 import { parseStaffPayouts, splitStaffNotes } from "./staff-payouts";
 
 const STORAGE_KEY = "tailor-app-data";
@@ -40,6 +41,11 @@ function read(): AppData {
             (cloth as { measurementChecks?: { inGroup?: boolean } })
               .measurementChecks?.inGroup,
           ),
+        orderBatchId:
+          cloth.orderBatchId ??
+          (cloth as { measurementChecks?: { orderBatchId?: string } })
+            .measurementChecks?.orderBatchId ??
+          "",
         totalAmount: cloth.totalAmount ?? 0,
         discountAmount: cloth.discountAmount ?? 0,
         advanceAmount: cloth.advanceAmount ?? 0,
@@ -63,6 +69,20 @@ function read(): AppData {
           (cloth as { expectedDate?: string | null }).expectedDate ??
           null,
         tailorExpectedDate: cloth.tailorExpectedDate ?? null,
+        staffJobs: jobsFromLegacyColumns({
+          ...cloth,
+          cutterId: cloth.cutterId ?? null,
+          tailorId: cloth.tailorId ?? null,
+          cutterPayAmount: cloth.cutterPayAmount ?? 0,
+          cutterPayAdvance: cloth.cutterPayAdvance ?? 0,
+          cutterPayFinal: cloth.cutterPayFinal ?? 0,
+          cutterPayRemarks: cloth.cutterPayRemarks ?? "",
+          tailorPayAmount: cloth.tailorPayAmount ?? 0,
+          tailorPayAdvance: cloth.tailorPayAdvance ?? 0,
+          tailorPayFinal: cloth.tailorPayFinal ?? 0,
+          tailorPayRemarks: cloth.tailorPayRemarks ?? "",
+          staffJobs: parseClothStaffJobs(cloth.staffJobs),
+        }),
       })),
     };
   } catch {
@@ -146,6 +166,7 @@ export function registerClothLocal(input: {
   cutterPayAmount?: number;
   tailorPayAmount?: number;
   code?: string;
+  orderBatchId?: string;
 }) {
   return registerClothOrderLocal([input])[0]!;
 }
@@ -174,6 +195,8 @@ export function registerClothOrderLocal(
     cutterPayAmount?: number;
     tailorPayAmount?: number;
     code?: string;
+    orderBatchId?: string;
+    staffJobs?: import("../types").ClothStaffJob[];
   }[],
 ) {
   if (inputs.length === 0) return [];
@@ -196,6 +219,7 @@ export function registerClothOrderLocal(
       size: input.size,
       measurements: input.measurements,
       inGroup: input.inGroup,
+      orderBatchId: input.orderBatchId?.trim() || "",
       notes: input.notes,
       status: "cutting",
       cutterId: input.cutterId || null,
@@ -219,6 +243,19 @@ export function registerClothOrderLocal(
       deliveryDate: input.deliveryDate?.trim() || null,
       cutterExpectedDate: input.cutterExpectedDate,
       tailorExpectedDate: input.tailorExpectedDate || null,
+      staffJobs: jobsFromLegacyColumns({
+        cutterId: input.cutterId || null,
+        tailorId: input.tailorId || null,
+        cutterPayAmount: input.cutterPayAmount ?? 0,
+        cutterPayAdvance: 0,
+        cutterPayFinal: 0,
+        cutterPayRemarks: "",
+        tailorPayAmount: input.tailorPayAmount ?? 0,
+        tailorPayAdvance: 0,
+        tailorPayFinal: 0,
+        tailorPayRemarks: "",
+        staffJobs: input.staffJobs ?? [],
+      }),
       createdAt: now,
       updatedAt: now,
     };
@@ -249,6 +286,8 @@ export function updateClothStaffPaymentsLocal(
   input: Partial<
     Pick<
       Cloth,
+      | "cutterId"
+      | "tailorId"
       | "cutterPayAmount"
       | "cutterPayAdvance"
       | "cutterPayFinal"
@@ -257,10 +296,19 @@ export function updateClothStaffPaymentsLocal(
       | "tailorPayAdvance"
       | "tailorPayFinal"
       | "tailorPayRemarks"
+      | "staffJobs"
     >
   >,
 ) {
   return updateClothLocal(id, input);
+}
+
+export function writeStaffJobsLocal(id: string, jobs: Cloth["staffJobs"]) {
+  return updateClothLocal(id, applyLegacyPayColumns(jobs));
+}
+
+export function updateClothCustomerPhoneLocal(ids: string[], customerPhone: string) {
+  for (const id of ids) updateClothLocal(id, { customerPhone });
 }
 
 export function updateClothDatesLocal(

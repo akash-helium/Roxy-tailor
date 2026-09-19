@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
-import { Camera, CheckCircle2, Hash, ScanBarcode, ScanLine, UserPlus } from 'lucide-react';
+import { Camera, CheckCircle2, Hash, ScanLine, UserPlus } from 'lucide-react';
 import { ensureCameraAccess } from '../lib/camera-permissions';
 import {
   assignCutter,
+  assignStaffJob,
   assignTailor,
   getClothByCode,
   getStaffById,
@@ -15,8 +16,9 @@ import {
 import { useAndroidBackHandler } from '../hooks/useAndroidBackHandler';
 import { useAppData } from '../hooks/useAppData';
 import { useHardwareScannerBusOptional, refocusScannerCapture } from '../contexts/HardwareScannerContext';
-import { supportsCameraScanner, supportsHardwareScanner } from '../lib/platform';
-import { isScanTerminatorKey, normalizeScannerBarcode, SUPPORTED_SCANNER } from '../lib/scanner-input';
+import { useStaffTypes } from '../contexts/StaffTypesContext';
+import { isDesktopApp, supportsCameraScanner, supportsHardwareScanner } from '../lib/platform';
+import { isScanTerminatorKey, normalizeScannerBarcode } from '../lib/scanner-input';
 import { PaymentDashboard, PaymentSummary } from '../components/PaymentDashboard';
 import {
   CLOTH_STATUS_COLORS,
@@ -29,8 +31,19 @@ import { getCustomerOrderCloths } from '../lib/customer-order';
 
 type ScanStep = 'idle' | 'scanning' | 'result';
 
+function extraStaffIdsFromCloth(cloth: Cloth, extraTypes: { slug: string }[]) {
+  return Object.fromEntries(
+    extraTypes.map((role) => [
+      role.slug,
+      cloth.staffJobs.find((job) => job.type === role.slug)?.staffId ?? '',
+    ]),
+  );
+}
+
 export function ScannerPage() {
   const { cloths, staff, loading, error, refetch } = useAppData();
+  const { types: staffRoleTypes } = useStaffTypes();
+  const extraStaffTypes = staffRoleTypes.filter((item) => item.slug !== 'cutter' && item.slug !== 'tailor');
   const location = useLocation();
   const navigate = useNavigate();
   const scannerRef = useRef<Html5Qrcode | null>(null);
@@ -39,6 +52,7 @@ export function ScannerPage() {
   const [activePieceId, setActivePieceId] = useState<string | null>(null);
   const [selectedCutterId, setSelectedCutterId] = useState('');
   const [selectedTailorId, setSelectedTailorId] = useState('');
+  const [extraStaffIds, setExtraStaffIds] = useState<Record<string, string>>({});
   const [cutterExpectedDate, setCutterExpectedDate] = useState('');
   const [tailorExpectedDate, setTailorExpectedDate] = useState('');
   const [scanError, setScanError] = useState<string | null>(null);
@@ -48,10 +62,9 @@ export function ScannerPage() {
   const manualInputRef = useRef<HTMLInputElement>(null);
 
   const hardwareScanner = supportsHardwareScanner();
-  const cameraScanner = supportsCameraScanner();
+  const cameraScanner = supportsCameraScanner() && !isDesktopApp();
   const scannerBus = useHardwareScannerBusOptional();
-  const lastScan = scannerBus?.lastScan ?? null;
-  const lastScanAt = scannerBus?.lastScanAt ?? null;
+  const scannerConnected = Boolean(hardwareScanner && scannerBus?.enabled);
 
   const tailors = getStaffByType(staff, 'tailor');
   const cutters = getStaffByType(staff, 'cutter');
@@ -172,6 +185,7 @@ export function ScannerPage() {
       setActivePieceId(cloth.id);
       setSelectedCutterId(cloth.cutterId ?? '');
       setSelectedTailorId(cloth.tailorId ?? '');
+      setExtraStaffIds(extraStaffIdsFromCloth(cloth, extraStaffTypes));
       setCutterExpectedDate(cloth.cutterExpectedDate ?? '');
       setTailorExpectedDate(cloth.tailorExpectedDate ?? '');
       setStep('result');
@@ -206,6 +220,7 @@ export function ScannerPage() {
     setActivePieceId(null);
     setSelectedCutterId('');
     setSelectedTailorId('');
+    setExtraStaffIds({});
     setCutterExpectedDate('');
     setTailorExpectedDate('');
     setManualCode('');
@@ -252,13 +267,17 @@ export function ScannerPage() {
         selectedCutterId || null,
         cutterExpectedDate.trim() || null,
       );
-      const updated = await assignTailor(
+      let updated = await assignTailor(
         activePiece.id,
         selectedTailorId || null,
         tailorExpectedDate.trim() || null,
         { startSewing: false },
       );
       if (!updated) return;
+      for (const role of extraStaffTypes) {
+        const next = await assignStaffJob(updated, role.slug, extraStaffIds[role.slug] || null);
+        if (next) updated = next;
+      }
       setScannedCloth(updated);
       setActivePieceId(updated.id);
       await refetch();
@@ -286,13 +305,18 @@ export function ScannerPage() {
         cutterId,
         cutterExpectedDate.trim() || null,
       );
-      await assignTailor(
+      let latest = await assignTailor(
         activePiece.id,
         selectedTailorId || null,
         tailorExpectedDate.trim() || null,
         { startSewing: false },
       );
-      const updated = await markCuttingComplete(activePiece.id);
+      if (!latest) return;
+      for (const role of extraStaffTypes) {
+        const next = await assignStaffJob(latest, role.slug, extraStaffIds[role.slug] || null);
+        if (next) latest = next;
+      }
+      const updated = await markCuttingComplete(latest.id);
       if (!updated) return;
       const nextId = scannedOrderCloths.find(
         (piece) => piece.id !== activePiece.id && piece.status !== 'completed',
@@ -314,17 +338,42 @@ export function ScannerPage() {
     setActionError(null);
 
     try {
-      const updated = await assignTailor(
+      let updated = await assignTailor(
         activePiece.id,
         selectedTailorId,
         tailorExpectedDate.trim(),
       );
       if (!updated) return;
+      for (const role of extraStaffTypes) {
+        const next = await assignStaffJob(updated, role.slug, extraStaffIds[role.slug] || null);
+        if (next) updated = next;
+      }
       setScannedCloth(updated);
       setActivePieceId(updated.id);
       await refetch();
     } catch (err) {
       setActionError(err instanceof Error ? err.message : 'Failed to assign tailor');
+    } finally {
+      setBusy(false);
+      refocusScannerCapture();
+    }
+  }
+
+  async function handleSaveExtraStaff() {
+    if (!activePiece) return;
+    setBusy(true);
+    setActionError(null);
+    try {
+      let latest = activePiece;
+      for (const role of extraStaffTypes) {
+        const next = await assignStaffJob(latest, role.slug, extraStaffIds[role.slug] || null);
+        if (next) latest = next;
+      }
+      setScannedCloth(latest);
+      setActivePieceId(latest.id);
+      await refetch();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Failed to assign staff');
     } finally {
       setBusy(false);
       refocusScannerCapture();
@@ -364,6 +413,7 @@ export function ScannerPage() {
     if (!activePiece) return;
     setSelectedCutterId(activePiece.cutterId ?? '');
     setSelectedTailorId(activePiece.tailorId ?? '');
+    setExtraStaffIds(extraStaffIdsFromCloth(activePiece, extraStaffTypes));
     setCutterExpectedDate(activePiece.cutterExpectedDate ?? '');
     setTailorExpectedDate(activePiece.tailorExpectedDate ?? '');
   }, [activePiece?.id]);
@@ -413,46 +463,31 @@ export function ScannerPage() {
       {step === 'idle' && (
         <div className="space-y-4">
           {hardwareScanner && (
-            <Card className="border-indigo-200 bg-indigo-50/40">
-              <div className="flex flex-col items-center py-6 text-center sm:flex-row sm:items-start sm:text-left">
-                <div className="mb-4 flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl bg-indigo-100 text-indigo-600 sm:mb-0 sm:mr-5">
-                  <ScanBarcode className="h-8 w-8" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="font-semibold text-slate-900">
-                    {SUPPORTED_SCANNER.model} ready
-                  </p>
-                  <p className="mt-1 text-sm text-slate-600">
-                    Plug in the USB dongle, keep this page open, then scan a{' '}
-                    <strong>printed staff ticket</strong>. Each cloth has its own barcode — the popup
-                    tracks that item only.
-                  </p>
-                  <p className="mt-2 text-xs text-slate-500">
-                    {SUPPORTED_SCANNER.type} · USB dongle · Tickets print as CODE128 on the TVS RP
-                    3200 LITE (80mm). Laser reads the paper, not the screen.
-                  </p>
-                  <div className="mt-3 rounded-xl border border-indigo-200 bg-white px-3 py-2 text-left">
-                    <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
-                      Last scan received
-                    </p>
-                    {lastScan ? (
-                      <p className="font-mono text-sm font-bold text-indigo-700">
-                        {lastScan}
-                        {lastScanAt ? (
-                          <span className="ml-2 text-xs font-medium text-slate-400">
-                            {new Date(lastScanAt).toLocaleTimeString()}
-                          </span>
-                        ) : null}
-                      </p>
-                    ) : (
-                      <p className="text-sm text-slate-500">
-                        None yet — test by scanning the barcode on your scanner (
-                        <span className="font-mono">BG90040267</span>). If it appears here, the
-                        dongle works.
-                      </p>
-                    )}
-                  </div>
-                </div>
+            <Card
+              className={
+                scannerConnected
+                  ? 'border-emerald-200 bg-emerald-50/70'
+                  : 'border-slate-200 bg-slate-50'
+              }
+            >
+              <div className="flex items-center gap-3">
+                <span className="relative flex h-3 w-3 shrink-0">
+                  {scannerConnected && (
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
+                  )}
+                  <span
+                    className={`relative inline-flex h-3 w-3 rounded-full ${
+                      scannerConnected ? 'bg-emerald-500' : 'bg-slate-300'
+                    }`}
+                  />
+                </span>
+                <p
+                  className={`text-sm font-semibold ${
+                    scannerConnected ? 'text-emerald-900' : 'text-slate-600'
+                  }`}
+                >
+                  {scannerConnected ? 'Barcode connected' : 'Barcode scanner disconnected'}
+                </p>
               </div>
             </Card>
           )}
@@ -835,6 +870,44 @@ export function ScannerPage() {
               >
                 <CheckCircle2 className="h-4 w-4" />
                 {busy ? 'Saving...' : 'Mark Sewing Complete'}
+              </Button>
+            </Card>
+          )}
+
+          {extraStaffTypes.some((role) => staff.some((member) => member.type === role.slug)) && (
+            <Card className="border-slate-200 bg-slate-50/70">
+              <p className="mb-3 text-sm font-semibold text-slate-800">Other staff</p>
+              <div className="space-y-3">
+                {extraStaffTypes.map((role) => {
+                  const members = staff.filter((member) => member.type === role.slug);
+                  if (members.length === 0) return null;
+                  return (
+                    <Select
+                      key={role.slug}
+                      label={role.label}
+                      value={extraStaffIds[role.slug] ?? ''}
+                      onChange={(e) =>
+                        setExtraStaffIds((current) => ({ ...current, [role.slug]: e.target.value }))
+                      }
+                    >
+                      <option value="">Assign later</option>
+                      {members.map((member) => (
+                        <option key={member.id} value={member.id}>
+                          {member.name}
+                        </option>
+                      ))}
+                    </Select>
+                  );
+                })}
+              </div>
+              <Button
+                onClick={() => void handleSaveExtraStaff()}
+                disabled={busy}
+                className="mt-4 w-full rounded-full py-3"
+                variant="secondary"
+              >
+                <UserPlus className="h-4 w-4" />
+                {busy ? 'Saving...' : 'Save other staff'}
               </Button>
             </Card>
           )}

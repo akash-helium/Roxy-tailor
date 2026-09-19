@@ -29,6 +29,7 @@ export async function printThermalTicket(input: {
   barcodeValue: string;
   footer?: string;
   headerImageUrl?: string;
+  copies?: number;
 }): Promise<ThermalPrintResult> {
   const api = desktopApi();
   if (!api?.printRaw) {
@@ -50,14 +51,28 @@ export async function printThermalTicket(input: {
       headerRaster = undefined;
     }
   }
-  const payload = buildEscPosTicket({
-    title: input.title ?? APP_NAME,
-    lines: input.lines,
-    barcodeValue: input.barcodeValue,
-    raster,
-    headerRaster,
-    footer: input.footer,
-  });
 
-  return api.printRaw(uint8ToBase64(payload));
+  const copyCount = Math.max(1, Math.min(2, input.copies ?? 1));
+  const payloads: Uint8Array[] = [];
+  for (let index = 0; index < copyCount; index += 1) {
+    payloads.push(
+      buildEscPosTicket({
+        title: input.title ?? APP_NAME,
+        lines: input.lines,
+        barcodeValue: input.barcodeValue,
+        raster,
+        headerRaster,
+        footer: input.footer,
+      }),
+    );
+  }
+  const total = payloads.reduce((sum, part) => sum + part.length, 0);
+  const combined = new Uint8Array(total);
+  let offset = 0;
+  for (const part of payloads) {
+    combined.set(part, offset);
+    offset += part.length;
+  }
+
+  return api.printRaw(uint8ToBase64(combined));
 }

@@ -2,7 +2,11 @@ import { APP_NAME, BILL_POLICY_NOTE } from "./app-config";
 import { formatCurrency } from "./payments";
 import { formatCalendarDate } from "./utils";
 import type { Cloth } from "../types";
-import { summarizeCustomerOrder, groupClothsForCustomerBill, customerBillItemLabel } from "./customer-order";
+import {
+  summarizeCustomerOrder,
+  groupClothsForCustomerBill,
+  customerBillItemLabel,
+} from "./customer-order";
 import { formatPrintDateTime } from "./print-ticket";
 
 export type BillBarcode = { code: string; dataUrl: string };
@@ -21,10 +25,12 @@ export function buildCustomerBillHtml(
   barcodes: BillBarcode[],
   printedAt = new Date(),
   logoDataUrl = "",
+  options?: { copies?: number },
 ) {
   const summary = summarizeCustomerOrder(cloths);
   const orderCode = summary.codes[0] || summary.codes.join(", ") || "—";
   const printedLabel = formatPrintDateTime(printedAt);
+  const copies = Math.max(1, Math.min(2, options?.copies ?? 1));
 
   const rows = groupClothsForCustomerBill(cloths)
     .map(
@@ -220,10 +226,18 @@ export function buildCustomerBillHtml(
     word-wrap: break-word;
     overflow-wrap: anywhere;
   }
+  .receipt + .receipt {
+    page-break-before: always;
+    break-before: page;
+    margin-top: 8mm;
+    padding-top: 6mm;
+  }
   @media print {
     body { padding: 0; max-width: 76mm; color: #000; background: #fff; }
+    .receipt + .receipt { margin-top: 0; padding-top: 0; }
   }
 </style></head><body>
+${Array.from({ length: copies }, () => `  <div class="receipt">
   <div class="header">
     ${
       logoDataUrl
@@ -252,7 +266,7 @@ export function buildCustomerBillHtml(
   <div class="totals">
     <div class="row total"><span>Total amount</span><span>${formatCurrency(summary.totalBill - summary.totalDiscount)}</span></div>
     <div class="row"><span>Advance</span><span>${formatCurrency(summary.totalAdvance)}</span></div>
-    ${summary.totalPart > 0 ? `<div class="row"><span>Part paid</span><span>${formatCurrency(summary.totalPart)}</span></div>` : ''}
+    ${summary.totalPart > 0 ? `<div class="row"><span>Part paid</span><span>${formatCurrency(summary.totalPart)}</span></div>` : ""}
     <div class="row pending"><span>Pending</span><span>${formatCurrency(summary.totalPending)}</span></div>
   </div>
   ${summary.notes ? `<div class="notes"><strong>Note:</strong> ${escapeHtml(summary.notes)}</div>` : ""}
@@ -261,5 +275,6 @@ export function buildCustomerBillHtml(
     ${barcodeBlock}
   </div>
   <div class="policy">${escapeHtml(BILL_POLICY_NOTE)}</div>
+  </div>`).join("\n")}
 </body></html>`;
 }

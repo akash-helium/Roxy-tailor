@@ -2,6 +2,11 @@ import { barcodeLookupCandidates } from "./barcode";
 import * as local from "./local-store";
 import * as remote from "./db";
 import {
+  jobsFromLegacyColumns,
+  staffRateForGarment,
+  upsertStaffJob,
+} from "./staff-jobs";
+import {
   resolveReadStorageMode,
   resolveWriteStorageMode,
 } from "./storage-mode";
@@ -11,7 +16,7 @@ import {
   CLOTH_PAGE_SIZE,
   type ClothStatusFilter,
 } from "./cloth-list";
-import type { DatedAmount, Staff, StaffPayout, StaffType } from "../types";
+import type { Cloth, ClothStaffJob, DatedAmount, Staff, StaffPayout, StaffType } from "../types";
 
 export type { Cloth } from "../types";
 export {
@@ -76,6 +81,8 @@ export async function registerCloth(input: {
   cutterPayAmount?: number;
   tailorPayAmount?: number;
   code?: string;
+  orderBatchId?: string;
+  staffJobs?: ClothStaffJob[];
 }) {
   const created = await registerClothOrder([input]);
   return created[0]!;
@@ -105,12 +112,59 @@ export async function registerClothOrder(
     cutterPayAmount?: number;
     tailorPayAmount?: number;
     code?: string;
+    orderBatchId?: string;
+    staffJobs?: import("../types").ClothStaffJob[];
   }[],
 ) {
   const mode = await resolveWriteStorageMode();
   return mode === "local"
     ? local.registerClothOrderLocal(inputs)
     : remote.registerClothOrder(inputs);
+}
+
+export async function adjustClothQuantity(
+  cloth: Cloth,
+  group: Cloth[],
+  quantity: number,
+) {
+  const qty = Math.min(50, Math.max(1, Math.floor(Number(quantity))));
+  const current = Math.max(1, group.length);
+  if (!Number.isFinite(qty) || qty === current) return;
+
+  if (qty < current) {
+    const others = group.filter((item) => item.id !== cloth.id);
+    await deleteCloths(others.slice(qty - 1).map((item) => item.id));
+    return;
+  }
+
+  const extras = qty - current;
+  const payload = {
+    customerName: cloth.customerName,
+    customerPhone: cloth.customerPhone,
+    garment: cloth.garment,
+    garmentType: cloth.garmentType,
+    gender: cloth.gender,
+    fabricColor: cloth.fabricColor,
+    size: cloth.size,
+    measurements: cloth.measurements,
+    inGroup: cloth.inGroup,
+    notes: cloth.notes,
+    cutterId: cloth.cutterId,
+    tailorId: cloth.tailorId,
+    totalAmount: cloth.totalAmount,
+    discountAmount: cloth.discountAmount,
+    advanceAmount: cloth.advanceAmount,
+    givenDate: cloth.givenDate,
+    deliveryDate: cloth.deliveryDate,
+    cutterExpectedDate: cloth.cutterExpectedDate,
+    tailorExpectedDate: cloth.tailorExpectedDate,
+    cutterPayAmount: cloth.cutterPayAmount,
+    tailorPayAmount: cloth.tailorPayAmount,
+    orderBatchId: cloth.orderBatchId || undefined,
+    staffJobs: cloth.staffJobs ?? [],
+  };
+
+  await registerClothOrder(Array.from({ length: extras }, () => payload));
 }
 
 export async function updateClothMeasurements(
@@ -165,6 +219,14 @@ export async function updateClothStaffPayments(
     : remote.updateClothStaffPayments(id, input);
 }
 
+export async function updateClothCustomerPhone(ids: string[], customerPhone: string) {
+  if (ids.length === 0) return;
+  const mode = await resolveWriteStorageMode();
+  return mode === "local"
+    ? local.updateClothCustomerPhoneLocal(ids, customerPhone)
+    : remote.updateClothCustomerPhone(ids, customerPhone);
+}
+
 export async function updateClothDates(
   id: string,
   input: {
@@ -199,15 +261,41 @@ export async function markCuttingComplete(id: string) {
     : remote.markCuttingComplete(id);
 }
 
+export async function writeStaffJobs(id: string, jobs: ClothStaffJob[]) {
+  const mode = await resolveWriteStorageMode();
+  return mode === "local"
+    ? local.writeStaffJobsLocal(id, jobs)
+    : remote.writeStaffJobs(id, jobs);
+}
+
+async function applyAssignmentPay(
+  cloth: Cloth | null,
+  type: string,
+  staffId: string | null,
+) {
+  if (!cloth) return cloth;
+  const jobs = jobsFromLegacyColumns(cloth);
+  const existing = jobs.find((job) => job.type === type);
+  const amount = staffId
+    ? existing?.staffId === staffId && existing.amount > 0
+      ? existing.amount
+      : staffRateForGarment(cloth.garmentType, type) || existing?.amount || 0
+    : 0;
+  const next = upsertStaffJob(jobs, { type, staffId, amount });
+  return writeStaffJobs(cloth.id, next);
+}
+
 export async function assignCutter(
   id: string,
   cutterId: string | null,
   cutterExpectedDate?: string | null,
 ) {
   const mode = await resolveWriteStorageMode();
-  return mode === "local"
-    ? local.assignCutterLocal(id, cutterId, cutterExpectedDate)
-    : remote.assignCutter(id, cutterId, cutterExpectedDate);
+  const assigned =
+    mode === "local"
+      ? local.assignCutterLocal(id, cutterId, cutterExpectedDate)
+      : await remote.assignCutter(id, cutterId, cutterExpectedDate);
+  return applyAssignmentPay(assigned, "cutter", cutterId);
 }
 
 export async function assignTailor(
@@ -217,9 +305,25 @@ export async function assignTailor(
   options?: { startSewing?: boolean },
 ) {
   const mode = await resolveWriteStorageMode();
-  return mode === "local"
-    ? local.assignTailorLocal(id, tailorId, tailorExpectedDate, options)
-    : remote.assignTailor(id, tailorId, tailorExpectedDate, options);
+  const assigned =
+    mode === "local"
+      ? local.assignTailorLocal(id, tailorId, tailorExpectedDate, options)
+      : await remote.assignTailor(id, tailorId, tailorExpectedDate, options);
+  return applyAssignmentPay(assigned, "tailor", tailorId);
+}
+
+export async function assignStaffJob(
+  cloth: Cloth,
+  type: string,
+  staffId: string | null,
+) {
+  if (type === "cutter") return assignCutter(cloth.id, staffId);
+  if (type === "tailor") {
+    return assignTailor(cloth.id, staffId, cloth.tailorExpectedDate ?? null, {
+      startSewing: (cloth.status === "ready_to_sew" || cloth.status === "sewing") && Boolean(staffId),
+    });
+  }
+  return applyAssignmentPay(cloth, type, staffId);
 }
 
 export async function markSewingComplete(id: string) {

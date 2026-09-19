@@ -1,5 +1,6 @@
 import { getGarmentType, isMeasurementOn, measurementFieldType } from './garments';
-import type { Cloth, DatedAmount } from '../types';
+import { parseClothStaffJobs } from './staff-jobs';
+import type { DatedAmount, ClothStaffJob, Cloth } from '../types';
 import type { Json } from '../types/database';
 
 export type MeasurementData = {
@@ -92,6 +93,9 @@ export function parseMeasurementChecks(value: unknown): {
   advanceDate: string;
   finalPaymentDate: string;
   deliveryDate: string;
+  orderBatchId: string;
+  staffJobs: ClothStaffJob[];
+  customerPhone: string;
 } {
   const record = parseJsonRecord<Record<string, unknown>>(value, {});
   return {
@@ -100,6 +104,9 @@ export function parseMeasurementChecks(value: unknown): {
     advanceDate: typeof record.advanceDate === 'string' ? record.advanceDate : '',
     finalPaymentDate: typeof record.finalPaymentDate === 'string' ? record.finalPaymentDate : '',
     deliveryDate: typeof record.deliveryDate === 'string' ? record.deliveryDate : '',
+    orderBatchId: typeof record.orderBatchId === 'string' ? record.orderBatchId : '',
+    staffJobs: parseClothStaffJobs(record.staffJobs),
+    customerPhone: typeof record.customerPhone === 'string' ? record.customerPhone.trim() : '',
   };
 }
 
@@ -109,6 +116,9 @@ export function measurementChecksPayload(input: {
   advanceDate?: string | null;
   finalPaymentDate?: string | null;
   deliveryDate?: string | null;
+  orderBatchId?: string | null;
+  staffJobs?: ClothStaffJob[];
+  customerPhone?: string | null;
 }): Json {
   return {
     inGroup: input.inGroup,
@@ -116,6 +126,9 @@ export function measurementChecksPayload(input: {
     advanceDate: input.advanceDate?.trim() || '',
     finalPaymentDate: input.finalPaymentDate?.trim() || '',
     deliveryDate: input.deliveryDate?.trim() || '',
+    orderBatchId: input.orderBatchId?.trim() || '',
+    staffJobs: input.staffJobs ?? [],
+    customerPhone: input.customerPhone?.trim() || '',
   } as unknown as Json;
 }
 

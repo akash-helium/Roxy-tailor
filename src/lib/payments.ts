@@ -1,5 +1,6 @@
 import type { Cloth, DatedAmount, Staff, StaffType } from '../types';
 import { staffPayoutTotal } from './staff-payouts';
+import { clothsForStaff, jobForStaff, jobsFromLegacyColumns } from './staff-jobs';
 
 export function clothNetAmount(cloth: Cloth) {
   return Math.max(0, cloth.totalAmount - (cloth.discountAmount ?? 0));
@@ -59,13 +60,24 @@ export function summarizePayments(cloths: Cloth[]) {
   );
 }
 
-export function getStaffCloths(staffId: string, staffType: StaffType, cloths: Cloth[]) {
-  return cloths.filter((cloth) =>
-    staffType === 'cutter' ? cloth.cutterId === staffId : cloth.tailorId === staffId,
-  );
+export function getStaffCloths(staffId: string, _staffType: StaffType, cloths: Cloth[]) {
+  return clothsForStaff(staffId, cloths);
 }
 
-export function getStaffPayFields(cloth: Cloth, staffType: StaffType) {
+export function getStaffPayFields(cloth: Cloth, staffType: StaffType, staffId?: string) {
+  const jobs = jobsFromLegacyColumns(cloth);
+  const job = staffId
+    ? jobs.find((item) => item.staffId === staffId && item.type === staffType) ??
+      jobs.find((item) => item.staffId === staffId)
+    : jobs.find((item) => item.type === staffType);
+  if (job) {
+    return {
+      amount: job.amount,
+      advance: job.advance,
+      final: job.final,
+      remarks: job.remarks,
+    };
+  }
   if (staffType === 'cutter') {
     return {
       amount: cloth.cutterPayAmount,
@@ -74,29 +86,36 @@ export function getStaffPayFields(cloth: Cloth, staffType: StaffType) {
       remarks: cloth.cutterPayRemarks,
     };
   }
-  return {
-    amount: cloth.tailorPayAmount,
-    advance: cloth.tailorPayAdvance,
-    final: cloth.tailorPayFinal,
-    remarks: cloth.tailorPayRemarks,
-  };
+  if (staffType === 'tailor') {
+    return {
+      amount: cloth.tailorPayAmount,
+      advance: cloth.tailorPayAdvance,
+      final: cloth.tailorPayFinal,
+      remarks: cloth.tailorPayRemarks,
+    };
+  }
+  return { amount: 0, advance: 0, final: 0, remarks: '' };
 }
 
 export function summarizeStaffPayments(staff: Staff, cloths: Cloth[]) {
   const assigned = getStaffCloths(staff.id, staff.type, cloths);
   const agreed = assigned.reduce(
     (acc, cloth) => {
-      const pay = getStaffPayFields(cloth, staff.type);
+      const pay = jobForStaff(cloth, staff.id, staff.type);
+      const amount = pay?.amount ?? getStaffPayFields(cloth, staff.type, staff.id).amount;
+      const advance = pay?.advance ?? 0;
+      const final = pay?.final ?? 0;
       acc.clothCount += 1;
-      acc.totalAmount += pay.amount;
-      acc.totalAdvance += pay.advance;
-      acc.totalFinal += pay.final;
+      acc.totalAmount += amount;
+      acc.totalAdvance += advance;
+      acc.totalFinal += final;
       return acc;
     },
     { clothCount: 0, totalAmount: 0, totalAdvance: 0, totalFinal: 0 },
   );
   const ledgerPaid = staffPayoutTotal(staff.payouts);
-  const paid = ledgerPaid > 0 ? ledgerPaid : agreed.totalAdvance + agreed.totalFinal;
+  const paidFromJobs = agreed.totalAdvance + agreed.totalFinal;
+  const paid = Math.max(ledgerPaid, paidFromJobs);
   return {
     ...agreed,
     ledgerPaid,
@@ -121,12 +140,15 @@ export function staffPayPatch(staffType: StaffType, input: StaffPayInput) {
       cutterPayRemarks: input.remarks,
     };
   }
-  return {
-    tailorPayAmount: input.amount,
-    tailorPayAdvance: input.advance,
-    tailorPayFinal: input.final,
-    tailorPayRemarks: input.remarks,
-  };
+  if (staffType === 'tailor') {
+    return {
+      tailorPayAmount: input.amount,
+      tailorPayAdvance: input.advance,
+      tailorPayFinal: input.final,
+      tailorPayRemarks: input.remarks,
+    };
+  }
+  return {};
 }
 
 export const EMPTY_STAFF_PAY: StaffPayInput = {

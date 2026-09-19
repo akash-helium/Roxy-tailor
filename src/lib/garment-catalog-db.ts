@@ -7,6 +7,8 @@ import {
   type GarmentType,
   type MeasurementField,
 } from './garments';
+import { parseStaffRates } from './staff-jobs';
+import type { Json } from '../types/database';
 
 type GarmentTypeRow = {
   id: string;
@@ -14,21 +16,52 @@ type GarmentTypeRow = {
   slug: string;
   label: string;
   gender: string;
-  fields: MeasurementField[] | null;
+  fields: unknown;
   sort_order: number;
+  staff_rates?: unknown;
 };
 
 function parseMeasurementFields(value: unknown): MeasurementField[] {
   return normalizeMeasurementFields(value);
 }
 
+function unpackGarmentFields(value: unknown): {
+  fields: MeasurementField[];
+  staffRates: Record<string, number>;
+} {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const record = value as Record<string, unknown>;
+    if ('fields' in record || 'staffRates' in record) {
+      return {
+        fields: parseMeasurementFields(record.fields),
+        staffRates: parseStaffRates(record.staffRates),
+      };
+    }
+  }
+  return {
+    fields: parseMeasurementFields(value),
+    staffRates: {},
+  };
+}
+
+function packGarmentFields(fields: MeasurementField[], staffRates: Record<string, number>): Json {
+  if (Object.keys(staffRates).length === 0) return fields as unknown as Json;
+  return { fields, staffRates } as unknown as Json;
+}
+
+function mergeStaffRates(...parts: Array<Record<string, number> | undefined>) {
+  return Object.assign({}, ...parts.filter(Boolean));
+}
+
 function rowToGarmentType(row: GarmentTypeRow): GarmentType {
+  const packed = unpackGarmentFields(row.fields);
   return {
     id: row.slug,
     dbId: row.id,
     label: row.label,
     gender: row.gender === 'female' ? 'female' : 'male',
-    fields: parseMeasurementFields(row.fields),
+    fields: packed.fields,
+    staffRates: mergeStaffRates(packed.staffRates, parseStaffRates(row.staff_rates)),
   };
 }
 
@@ -99,10 +132,20 @@ export async function seedDefaultGarmentCatalog() {
     label: garment.label,
     gender: garment.gender,
     fields: garment.fields,
+    staff_rates: garment.staffRates ?? {},
     sort_order: index,
   }));
 
   const { error } = await supabase.from('garment_types').insert(rows);
+  if (error && /staff_rates/i.test(error.message)) {
+    const stripped = rows.map(({ staff_rates: rates, ...rest }) => ({
+      ...rest,
+      fields: packGarmentFields(rest.fields ?? [], parseStaffRates(rates)),
+    }));
+    const retry = await supabase.from('garment_types').insert(stripped);
+    if (retry.error) throw retry.error;
+    return true;
+  }
   if (error) throw error;
   return true;
 }
@@ -160,26 +203,37 @@ export async function createGarmentType(input: {
   label: string;
   gender: GarmentGender;
   fields?: MeasurementField[];
+  staffRates?: Record<string, number>;
 }) {
   const userId = await resolveShopUserId();
   if (!userId) throw new Error('Shop user not configured');
 
   const slug = await uniqueSlug(input.label, input.gender);
-  const { data, error } = await supabase
-    .from('garment_types')
-    .insert({
-      user_id: userId,
-      slug,
-      label: input.label.trim(),
-      gender: input.gender,
-      fields: input.fields ?? [],
-      sort_order: await nextGarmentSortOrder(),
-    })
-    .select('*')
-    .single();
-
-  if (error) throw error;
-  return rowToGarmentType(data as GarmentTypeRow);
+  const row = {
+    user_id: userId,
+    slug,
+    label: input.label.trim(),
+    gender: input.gender,
+    fields: packGarmentFields(input.fields ?? [], input.staffRates ?? {}),
+    sort_order: await nextGarmentSortOrder(),
+    staff_rates: input.staffRates ?? {},
+  };
+  const first = await supabase.from('garment_types').insert(row).select('*').single();
+  if (first.error && /staff_rates/i.test(first.error.message)) {
+    const { staff_rates: _rates, ...rest } = row;
+    const retry = await supabase
+      .from('garment_types')
+      .insert({
+        ...rest,
+        fields: packGarmentFields(input.fields ?? [], input.staffRates ?? {}),
+      })
+      .select('*')
+      .single();
+    if (retry.error) throw retry.error;
+    return rowToGarmentType(retry.data as GarmentTypeRow);
+  }
+  if (first.error) throw first.error;
+  return rowToGarmentType(first.data as GarmentTypeRow);
 }
 
 export async function updateGarmentType(
@@ -188,18 +242,29 @@ export async function updateGarmentType(
     label?: string;
     gender?: GarmentGender;
     fields?: MeasurementField[];
+    staffRates?: Record<string, number>;
   },
 ) {
+  const current = await supabase.from('garment_types').select('fields').eq('id', dbId).single();
+  if (current.error) throw current.error;
+  const packed = unpackGarmentFields(current.data.fields);
+  const nextFields = input.fields ?? packed.fields;
+  const nextRates = input.staffRates ?? packed.staffRates;
+
   const update: {
     label?: string;
     gender?: GarmentGender;
-    fields?: MeasurementField[];
+    fields?: Json;
     slug?: string;
+    staff_rates?: Record<string, number>;
   } = {};
 
   if (input.label !== undefined) update.label = input.label.trim();
   if (input.gender !== undefined) update.gender = input.gender;
-  if (input.fields !== undefined) update.fields = input.fields;
+  if (input.fields !== undefined || input.staffRates !== undefined) {
+    update.fields = packGarmentFields(nextFields, nextRates);
+  }
+  if (input.staffRates !== undefined) update.staff_rates = input.staffRates;
 
   if (input.label && input.gender) {
     update.slug = await uniqueSlug(input.label, input.gender, dbId);
@@ -212,6 +277,13 @@ export async function updateGarmentType(
     .select('*')
     .single();
 
+  if (error && /staff_rates/i.test(error.message)) {
+    const { staff_rates: _rates, ...rest } = update;
+    const retry = await supabase.from('garment_types').update(rest).eq('id', dbId).select('*').single();
+    if (retry.error) throw retry.error;
+    return rowToGarmentType(retry.data as GarmentTypeRow);
+  }
+
   if (error) throw error;
   return rowToGarmentType(data as GarmentTypeRow);
 }
@@ -222,9 +294,16 @@ export async function deleteGarmentType(dbId: string) {
 }
 
 async function updateGarmentFields(dbId: string, fields: MeasurementField[]) {
+  const { data: row, error: fetchError } = await supabase
+    .from('garment_types')
+    .select('fields')
+    .eq('id', dbId)
+    .single();
+  if (fetchError) throw fetchError;
+  const packed = unpackGarmentFields(row.fields);
   const { data, error } = await supabase
     .from('garment_types')
-    .update({ fields })
+    .update({ fields: packGarmentFields(fields, packed.staffRates) })
     .eq('id', dbId)
     .select('*')
     .single();
@@ -242,13 +321,12 @@ export async function addGarmentSizeField(dbId: string, field: MeasurementField)
 
   if (fetchError) throw fetchError;
 
-  const fields = parseMeasurementFields(row.fields);
-  if (fields.some((item) => item.id === field.id)) {
+  const packed = unpackGarmentFields(row.fields);
+  if (packed.fields.some((item) => item.id === field.id)) {
     throw new Error('A size field with this name already exists');
   }
 
-  fields.push(field);
-  return updateGarmentFields(dbId, fields);
+  return updateGarmentFields(dbId, [...packed.fields, field]);
 }
 
 export async function removeGarmentSizeField(dbId: string, fieldId: string) {
@@ -260,8 +338,11 @@ export async function removeGarmentSizeField(dbId: string, fieldId: string) {
 
   if (fetchError) throw fetchError;
 
-  const fields = parseMeasurementFields(row.fields).filter((item) => item.id !== fieldId);
-  return updateGarmentFields(dbId, fields);
+  const packed = unpackGarmentFields(row.fields);
+  return updateGarmentFields(
+    dbId,
+    packed.fields.filter((item) => item.id !== fieldId),
+  );
 }
 
 export async function updateGarmentSizeField(
@@ -277,14 +358,14 @@ export async function updateGarmentSizeField(
 
   if (fetchError) throw fetchError;
 
-  const fields = parseMeasurementFields(row.fields);
-  const index = fields.findIndex((item) => item.id === fieldId);
+  const packed = unpackGarmentFields(row.fields);
+  const index = packed.fields.findIndex((item) => item.id === fieldId);
   if (index < 0) {
     throw new Error('Size field not found');
   }
 
-  fields[index] = { ...next, id: fieldId };
-  return updateGarmentFields(dbId, fields);
+  packed.fields[index] = { ...next, id: fieldId };
+  return updateGarmentFields(dbId, packed.fields);
 }
 
 export function fieldKeyFromLabel(label: string) {

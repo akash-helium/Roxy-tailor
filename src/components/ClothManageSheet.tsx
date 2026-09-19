@@ -1,13 +1,15 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Save, Plus, Trash2, X } from 'lucide-react';
 import type { Cloth, Staff } from '../types';
-import { getStaffById, updateClothPayments, updateClothStaffPayments, updateClothDates, updateClothMeasurements } from '../lib/data';
+import { getStaffById, updateClothPayments, updateClothDates, updateClothMeasurements, updateClothCustomerPhone, adjustClothQuantity, writeStaffJobs } from '../lib/data';
+import { normalizeCustomerPhone } from '../lib/whatsapp';
 import { clothPendingAmount, clothNetAmount, formatCurrency, parseAmount, parsePartPaymentDrafts, emptyPartPaymentDraft } from '../lib/payments';
 import { formatCalendarDate, isPastDue, clothDescription, todayDateString } from '../lib/utils';
 import { garmentDisplayLabel, getGarmentType } from '../lib/garments';
 import { formatMeasurementsSummary } from '../lib/measurements';
 import { groupClothsForStaffTickets } from '../lib/customer-order';
+import { jobsFromLegacyColumns, staffRateForGarment, upsertStaffJob } from '../lib/staff-jobs';
 import { StaffPayForm } from './StaffPaymentSheet';
 import { GarmentSizingForm } from './GarmentSizingForm';
 import {
@@ -16,7 +18,8 @@ import {
 } from '../types';
 import { useAndroidBackHandler } from '../hooks/useAndroidBackHandler';
 import { PaymentSummary } from './PaymentDashboard';
-import { Badge, Button, Input } from './ui';
+import { useStaffTypes } from '../contexts/StaffTypesContext';
+import { Badge, Button, Input, Select, showToast } from './ui';
 
 export function ClothManageSheet({
   cloth,
@@ -69,10 +72,26 @@ export function ClothManageSheet({
   const [cutterExpectedDate, setCutterExpectedDate] = useState(cloth.cutterExpectedDate ?? '');
   const [tailorExpectedDate, setTailorExpectedDate] = useState(cloth.tailorExpectedDate ?? '');
   const [busy, setBusy] = useState(false);
-  const [staffBusy, setStaffBusy] = useState(false);
-  const [datesBusy, setDatesBusy] = useState(false);
-  const [sizeBusy, setSizeBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [quantity, setQuantity] = useState('1');
+  const [customerPhone, setCustomerPhone] = useState(cloth.customerPhone ?? '');
+  const { types: staffRoleTypes, getLabel: staffTypeLabel } = useStaffTypes();
+  const extraStaffTypes = staffRoleTypes.filter((item) => item.slug !== 'cutter' && item.slug !== 'tailor');
+  const extraJobs = jobsFromLegacyColumns(cloth).filter(
+    (job) => job.type !== 'cutter' && job.type !== 'tailor',
+  );
+  const [extraAssign, setExtraAssign] = useState<Record<string, string>>(() =>
+    Object.fromEntries(extraJobs.map((job) => [job.type, job.staffId])),
+  );
+  const [extraPay, setExtraPay] = useState<Record<string, { amount: number; advance: number; final: number; remarks: string }>>(
+    () =>
+      Object.fromEntries(
+        extraJobs.map((job) => [
+          job.type,
+          { amount: job.amount, advance: job.advance, final: job.final, remarks: job.remarks },
+        ]),
+      ),
+  );
 
   const cutter = getStaffById(staff, cloth.cutterId);
   const tailor = getStaffById(staff, cloth.tailorId);
@@ -88,6 +107,11 @@ export function ClothManageSheet({
     );
     return group?.length ?? 1;
   }, [orderCloths, cloth]);
+
+  useEffect(() => {
+    setQuantity(String(groupQty));
+    setCustomerPhone(cloth.customerPhone ?? '');
+  }, [cloth.id, cloth.customerPhone, groupQty]);
 
   useAndroidBackHandler(onClose);
 
@@ -114,43 +138,67 @@ export function ClothManageSheet({
     size: formatMeasurementsSummary(sizing.garmentType, sizing.measurements) || cloth.size,
   };
 
-  async function handleSaveSizing() {
-    setSizeBusy(true);
+  async function handleSave() {
     setError(null);
     const garmentType = getGarmentType(sizing.garmentType);
     if (!garmentType) {
       setError('Please select a cloth type');
-      setSizeBusy(false);
       return;
     }
-    try {
-      await updateClothMeasurements(cloth.id, {
-        garment: garmentDisplayLabel(sizing.garmentType, garmentType.label),
-        garmentType: sizing.garmentType,
-        gender: sizing.gender,
-        size: formatMeasurementsSummary(sizing.garmentType, sizing.measurements),
-        measurements: sizing.measurements,
-        inGroup: sizing.inGroup,
-      });
-      onUpdated();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save sizing');
-    } finally {
-      setSizeBusy(false);
-    }
-  }
-
-  async function handleSavePayments() {
-    setBusy(true);
-    setError(null);
     const total = parseAmount(totalAmount);
     const discount = parseAmount(discountAmount);
     if (discount > total) {
       setError('Discount cannot exceed total amount');
-      setBusy(false);
       return;
     }
+    const phoneResult = normalizeCustomerPhone(customerPhone);
+    if (!phoneResult.ok) {
+      setError(phoneResult.error);
+      return;
+    }
+
+    setBusy(true);
     try {
+      const sizeSummary = formatMeasurementsSummary(sizing.garmentType, sizing.measurements);
+      const garmentLabel = garmentDisplayLabel(sizing.garmentType, garmentType.label);
+      await updateClothMeasurements(cloth.id, {
+        garment: garmentLabel,
+        garmentType: sizing.garmentType,
+        gender: sizing.gender,
+        size: sizeSummary,
+        measurements: sizing.measurements,
+        inGroup: sizing.inGroup,
+      });
+      const list = orderCloths && orderCloths.length > 0 ? orderCloths : [cloth];
+      await updateClothCustomerPhone(
+        [...new Set(list.map((item) => item.id))],
+        phoneResult.phone,
+      );
+      const group =
+        groupClothsForStaffTickets(list).find((items) =>
+          items.some((item) => item.id === cloth.id),
+        ) ?? [cloth];
+      const nextQty = Math.min(50, Math.max(1, Math.floor(Number(quantity)) || 1));
+      await adjustClothQuantity(
+        {
+          ...cloth,
+          customerPhone: phoneResult.phone,
+          garment: garmentLabel,
+          garmentType: sizing.garmentType,
+          gender: sizing.gender,
+          size: sizeSummary,
+          measurements: sizing.measurements,
+          inGroup: sizing.inGroup,
+        },
+        group,
+        nextQty,
+      );
+      await updateClothDates(cloth.id, {
+        givenDate: givenDate.trim() || null,
+        deliveryDate: deliveryDate.trim() || null,
+        cutterExpectedDate: cutterExpectedDate.trim() || null,
+        tailorExpectedDate: tailorExpectedDate.trim() || null,
+      });
       await updateClothPayments(cloth.id, {
         totalAmount: total,
         discountAmount: discount,
@@ -164,65 +212,61 @@ export function ClothManageSheet({
         finalPaymentDate:
           parseAmount(finalPaymentAmount) > 0 ? finalPaymentDate.trim() || todayDateString() : null,
       });
+      if (cutter || tailor || extraStaffTypes.some((role) => extraAssign[role.slug])) {
+        let jobs = jobsFromLegacyColumns(cloth);
+        if (cutter && cloth.cutterId) {
+          jobs = upsertStaffJob(jobs, {
+            type: 'cutter',
+            staffId: cloth.cutterId,
+            amount: cutterPay.amount,
+            advance: cutterPay.advance,
+            final: cutterPay.final,
+            remarks: cutterPay.remarks,
+          });
+        }
+        if (tailor && cloth.tailorId) {
+          jobs = upsertStaffJob(jobs, {
+            type: 'tailor',
+            staffId: cloth.tailorId,
+            amount: tailorPay.amount,
+            advance: tailorPay.advance,
+            final: tailorPay.final,
+            remarks: tailorPay.remarks,
+          });
+        }
+        for (const role of extraStaffTypes) {
+          const staffId = extraAssign[role.slug] || null;
+          const pay = extraPay[role.slug];
+          jobs = upsertStaffJob(jobs, {
+            type: role.slug,
+            staffId,
+            amount: pay?.amount ?? staffRateForGarment(cloth.garmentType, role.slug),
+            advance: pay?.advance ?? 0,
+            final: pay?.final ?? 0,
+            remarks: pay?.remarks ?? '',
+          });
+        }
+        await writeStaffJobs(cloth.id, jobs);
+      }
       onUpdated();
+      showToast('Saved');
+      onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save payments');
+      setError(err instanceof Error ? err.message : 'Failed to save');
     } finally {
       setBusy(false);
-    }
-  }
-
-  async function handleSaveStaffPayments() {
-    setStaffBusy(true);
-    setError(null);
-    try {
-      await updateClothStaffPayments(cloth.id, {
-        cutterPayAmount: cutterPay.amount,
-        cutterPayAdvance: cutterPay.advance,
-        cutterPayFinal: cutterPay.final,
-        cutterPayRemarks: cutterPay.remarks,
-        tailorPayAmount: tailorPay.amount,
-        tailorPayAdvance: tailorPay.advance,
-        tailorPayFinal: tailorPay.final,
-        tailorPayRemarks: tailorPay.remarks,
-      });
-      onUpdated();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save staff payments');
-    } finally {
-      setStaffBusy(false);
-    }
-  }
-
-  async function handleSaveDates() {
-    setDatesBusy(true);
-    setError(null);
-    try {
-      await updateClothDates(cloth.id, {
-        givenDate: givenDate.trim() || null,
-        deliveryDate: deliveryDate.trim() || null,
-        cutterExpectedDate: cutterExpectedDate.trim() || null,
-        tailorExpectedDate: tailorExpectedDate.trim() || null,
-      });
-      onUpdated();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save dates');
-    } finally {
-      setDatesBusy(false);
     }
   }
 
   return createPortal(
     <div className="fixed inset-0 z-[200] flex items-end justify-center bg-slate-900/40 sm:items-center">
       <button type="button" className="absolute inset-0" aria-label="Close" onClick={onClose} />
-      <div className="relative z-10 max-h-[90dvh] w-full max-w-md overflow-y-auto rounded-t-3xl border border-slate-100 bg-white p-5 shadow-2xl sm:rounded-3xl">
+      <div className="relative z-10 flex max-h-[90dvh] w-full max-w-md flex-col overflow-hidden rounded-t-3xl border border-slate-100 bg-white shadow-2xl sm:rounded-3xl">
+        <div className="min-h-0 flex-1 overflow-y-auto p-5 pb-3">
         <div className="mb-4 flex items-start justify-between gap-3">
           <div>
             <p className="font-mono text-lg font-bold text-indigo-600">{cloth.code}</p>
             <p className="font-semibold text-slate-900">{cloth.customerName}</p>
-            {cloth.customerPhone ? (
-              <p className="text-xs text-slate-500">{cloth.customerPhone}</p>
-            ) : null}
             <p className="text-sm text-slate-500">
               {clothDescription(previewCloth)}
               {groupQty > 1 ? ` · Qty ${groupQty}` : ''}
@@ -245,6 +289,15 @@ export function ClothManageSheet({
         <div className="mb-4 space-y-1 text-sm text-slate-600">
           {cutter && <p>Cutter: <strong>{cutter.name}</strong></p>}
           {tailor && <p>Tailor: <strong>{tailor.name}</strong></p>}
+          {extraJobs.map((job) => {
+            const member = getStaffById(staff, job.staffId);
+            if (!member) return null;
+            return (
+              <p key={job.type}>
+                {staffTypeLabel(job.type)}: <strong>{member.name}</strong>
+              </p>
+            );
+          })}
         </div>
 
         {error && (
@@ -254,6 +307,17 @@ export function ClothManageSheet({
         <div className="space-y-3">
           <div className="rounded-2xl border border-slate-200 bg-slate-50/50 p-4">
             <p className="mb-3 text-sm font-semibold text-slate-800">Cloth & Measurements</p>
+            <div className="mb-3">
+              <Input
+                label="Mobile number"
+                type="tel"
+                inputMode="numeric"
+                autoComplete="off"
+                value={customerPhone}
+                onChange={(e) => setCustomerPhone(e.target.value)}
+                placeholder="9876543210"
+              />
+            </div>
             <GarmentSizingForm
               value={sizing}
               onChange={setSizing}
@@ -261,19 +325,14 @@ export function ClothManageSheet({
                 <Input
                   label="Qty"
                   type="number"
-                  value={groupQty}
-                  readOnly
+                  min="1"
+                  max="50"
+                  step="1"
+                  value={quantity}
+                  onChange={(e) => setQuantity(e.target.value)}
                 />
               }
             />
-            <Button
-              className="mt-4 w-full rounded-full py-3"
-              disabled={sizeBusy}
-              onClick={() => void handleSaveSizing()}
-            >
-              <Save className="h-4 w-4" />
-              {sizeBusy ? 'Saving...' : 'Save Cloth & Measurements'}
-            </Button>
           </div>
 
           <div className="rounded-2xl border border-sky-200 bg-sky-50/50 p-4">
@@ -334,14 +393,6 @@ export function ClothManageSheet({
                 )}
               </p>
             )}
-            <Button
-              className="mt-4 w-full rounded-full py-3"
-              disabled={datesBusy}
-              onClick={() => void handleSaveDates()}
-            >
-              <Save className="h-4 w-4" />
-              {datesBusy ? 'Saving...' : 'Save Dates'}
-            </Button>
           </div>
 
           <div className="rounded-2xl border border-emerald-200 bg-emerald-50/50 p-4">
@@ -467,17 +518,9 @@ export function ClothManageSheet({
                 <strong className="text-amber-700">{formatCurrency(clothPendingAmount(preview))}</strong>
               </div>
             </div>
-            <Button
-              className="mt-4 w-full rounded-full py-3"
-              disabled={busy}
-              onClick={() => void handleSavePayments()}
-            >
-              <Save className="h-4 w-4" />
-              {busy ? 'Saving...' : 'Save Payment'}
-            </Button>
           </div>
 
-          {(cutter || tailor) && (
+          {(cutter || tailor || extraStaffTypes.some((role) => staff.some((member) => member.type === role.slug))) && (
             <div className="rounded-2xl border border-indigo-200 bg-indigo-50/50 p-4">
               <p className="mb-3 text-sm font-semibold text-slate-800">Staff Payment</p>
               <div className="space-y-4">
@@ -497,15 +540,63 @@ export function ClothManageSheet({
                     <StaffPayForm pay={tailorPay} onChange={setTailorPay} />
                   </div>
                 )}
+                {extraStaffTypes.map((role) => {
+                  const members = staff.filter((member) => member.type === role.slug);
+                  if (members.length === 0) return null;
+                  const staffId = extraAssign[role.slug] ?? '';
+                  const member = getStaffById(staff, staffId);
+                  const pay = extraPay[role.slug] ?? {
+                    amount: staffRateForGarment(cloth.garmentType, role.slug),
+                    advance: 0,
+                    final: 0,
+                    remarks: '',
+                  };
+                  return (
+                    <div key={role.slug}>
+                      <Select
+                        label={role.label}
+                        value={staffId}
+                        onChange={(e) => {
+                          const nextId = e.target.value;
+                          setExtraAssign((current) => ({ ...current, [role.slug]: nextId }));
+                          setExtraPay((current) => ({
+                            ...current,
+                            [role.slug]: {
+                              amount: nextId
+                                ? current[role.slug]?.amount ||
+                                  staffRateForGarment(cloth.garmentType, role.slug)
+                                : 0,
+                              advance: current[role.slug]?.advance ?? 0,
+                              final: current[role.slug]?.final ?? 0,
+                              remarks: current[role.slug]?.remarks ?? '',
+                            },
+                          }));
+                        }}
+                      >
+                        <option value="">Not assigned</option>
+                        {members.map((item) => (
+                          <option key={item.id} value={item.id}>
+                            {item.name}
+                          </option>
+                        ))}
+                      </Select>
+                      {member && (
+                        <div className="mt-3">
+                          <p className="mb-2 text-xs font-medium uppercase tracking-wide text-indigo-700">
+                            {role.label}: {member.name}
+                          </p>
+                          <StaffPayForm
+                            pay={pay}
+                            onChange={(next) =>
+                              setExtraPay((current) => ({ ...current, [role.slug]: next }))
+                            }
+                          />
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
-              <Button
-                className="mt-4 w-full rounded-full py-3"
-                disabled={staffBusy}
-                onClick={() => void handleSaveStaffPayments()}
-              >
-                <Save className="h-4 w-4" />
-                {staffBusy ? 'Saving...' : 'Save Staff Payment'}
-              </Button>
             </div>
           )}
 
@@ -517,6 +608,17 @@ export function ClothManageSheet({
 
           <Button variant="secondary" className="w-full rounded-full py-3" onClick={onShowBarcode}>
             View / Print Barcode
+          </Button>
+        </div>
+        </div>
+        <div className="border-t border-slate-100 bg-white p-4">
+          <Button
+            className="w-full rounded-full py-3.5"
+            disabled={busy}
+            onClick={() => void handleSave()}
+          >
+            <Save className="h-4 w-4" />
+            {busy ? 'Saving...' : 'Save'}
           </Button>
         </div>
       </div>
