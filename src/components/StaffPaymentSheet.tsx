@@ -1,25 +1,22 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ChevronDown, ChevronUp, Plus, Save, Trash2, X } from 'lucide-react';
+import { History, Trash2, Wallet, X } from 'lucide-react';
 import type { Cloth, Staff, StaffPayout } from '../types';
-import { updateClothStaffPayments, updateStaffPayouts, writeStaffJobs } from '../lib/data';
+import { updateStaffPayouts, writeStaffJobs } from '../lib/data';
 import {
   formatCurrency,
   getStaffCloths,
-  getStaffPayFields,
   parseAmount,
-  staffPayPatch,
   staffPayPending,
   summarizeStaffPayments,
   type StaffPayInput,
 } from '../lib/payments';
-import { clothDescription, clothBillName, formatCalendarDate, generateId, todayDateString } from '../lib/utils';
-import { groupClothsForStaffTickets } from '../lib/customer-order';
+import { formatCalendarDate, generateId, todayDateString } from '../lib/utils';
 import { jobForStaff, jobsFromLegacyColumns, upsertStaffJob } from '../lib/staff-jobs';
+import { payoutProductLine, unpaidStaffGroups } from '../lib/staff-ledger';
 import { sortStaffPayouts } from '../lib/staff-payouts';
-import { CLOTH_STATUS_COLORS, CLOTH_STATUS_LABELS } from '../types';
 import { useAndroidBackHandler } from '../hooks/useAndroidBackHandler';
-import { Badge, Button, Card, Input, Textarea } from './ui';
+import { Button, Input, Select, Textarea, showToast } from './ui';
 
 function StaffPayForm({
   pay,
@@ -74,87 +71,298 @@ function StaffPayForm({
   );
 }
 
-function ClothStaffPayRow({
-  cloth,
+export function StaffLedgerPanel({
   staff,
-  onSaved,
+  cloths,
+  onUpdated,
+  layout = 'stack',
 }: {
-  cloth: Cloth;
   staff: Staff;
-  onSaved: () => void;
+  cloths: Cloth[];
+  onUpdated: () => void;
+  layout?: 'stack' | 'split';
 }) {
-  const initial = getStaffPayFields(cloth, staff.type, staff.id);
-  const [open, setOpen] = useState(false);
-  const [pay, setPay] = useState<StaffPayInput>(initial);
+  const assigned = getStaffCloths(staff.id, staff.type, cloths);
+  const liveStaff: Staff = { ...staff, payouts: staff.payouts ?? [] };
+  const summary = summarizeStaffPayments(liveStaff, cloths);
+  const unpaidGroups = unpaidStaffGroups(liveStaff, cloths);
+  const ledger = sortStaffPayouts(liveStaff.payouts);
+  const [productKey, setProductKey] = useState('');
+  const [qty, setQty] = useState('1');
+  const [amount, setAmount] = useState('');
+  const [date, setDate] = useState(todayDateString());
+  const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const pending = staffPayPending(pay.amount, pay.advance, pay.final);
-  const status = cloth.status in CLOTH_STATUS_LABELS ? cloth.status : 'cutting';
 
-  async function handleSave() {
+  const selected = unpaidGroups.find((group) => group.key === productKey) ?? unpaidGroups[0] ?? null;
+
+  useEffect(() => {
+    if (!selected) {
+      setProductKey('');
+      setQty('1');
+      setAmount('');
+      return;
+    }
+    setProductKey(selected.key);
+    setQty('1');
+    setAmount(String(Math.round(selected.rate * 100) / 100));
+  }, [selected?.key, selected?.rate]);
+
+  const payQty = useMemo(() => {
+    const parsed = Math.floor(Number(qty));
+    if (!selected) return 1;
+    if (!Number.isFinite(parsed) || parsed < 1) return 1;
+    return Math.min(parsed, selected.unpaidQty);
+  }, [qty, selected]);
+
+  const suggested = selected ? Math.round(selected.rate * payQty * 100) / 100 : 0;
+
+  async function handlePay() {
+    if (!selected) {
+      setError('No unpaid product for this staff');
+      return;
+    }
+    const payoutAmount = parseAmount(amount) || suggested;
+    if (payoutAmount <= 0) {
+      setError('Enter the amount you are paying');
+      return;
+    }
+    const pieces = selected.unpaid.slice(0, payQty);
+    if (pieces.length === 0) {
+      setError('Select how many pieces to pay');
+      return;
+    }
+    const perPiece = Math.round((payoutAmount / pieces.length) * 100) / 100;
     setBusy(true);
     setError(null);
     try {
-      const patch = staffPayPatch(staff.type, pay);
-      if (Object.keys(patch).length > 0) {
-        await updateClothStaffPayments(cloth.id, patch);
+      for (const piece of pieces) {
+        const job = jobForStaff(piece, staff.id, staff.type);
+        const pieceAmount = job?.amount || selected.rate || perPiece;
+        const nextFinal = Math.min(pieceAmount, (job?.final ?? 0) + perPiece);
+        const jobs = upsertStaffJob(jobsFromLegacyColumns(piece), {
+          type: staff.type,
+          staffId: staff.id,
+          amount: pieceAmount,
+          advance: job?.advance ?? 0,
+          final: nextFinal,
+          remarks: job?.remarks ?? '',
+        });
+        await writeStaffJobs(piece.id, jobs);
       }
-      const jobs = upsertStaffJob(jobsFromLegacyColumns(cloth), {
-        type: staff.type,
-        staffId: staff.id,
-        amount: pay.amount,
-        advance: pay.advance,
-        final: pay.final,
-        remarks: pay.remarks,
-      });
-      await writeStaffJobs(cloth.id, jobs);
-      onSaved();
+      await updateStaffPayouts(staff.id, [
+        {
+          id: generateId(),
+          amount: payoutAmount,
+          date: date.trim() || todayDateString(),
+          note: note.trim() || undefined,
+          clothIds: pieces.map((item) => item.id),
+          productLabel: `${selected.label} · ${selected.customerName}`,
+          qty: pieces.length,
+          rate: selected.rate,
+        },
+        ...liveStaff.payouts,
+      ]);
+      showToast(`Paid ${formatCurrency(payoutAmount)} for ${pieces.length} ${selected.label}`);
+      setNote('');
+      setDate(todayDateString());
+      onUpdated();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save payment');
+      setError(err instanceof Error ? err.message : 'Failed to save payout');
     } finally {
       setBusy(false);
     }
   }
 
-  return (
-    <Card className="overflow-hidden p-0">
-      <button
-        type="button"
-        className="flex w-full items-center justify-between gap-3 p-4 text-left"
-        onClick={() => setOpen((value) => !value)}
-      >
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <p className="font-mono text-sm font-bold text-indigo-600">{cloth.code}</p>
-            <Badge className={CLOTH_STATUS_COLORS[status]}>{CLOTH_STATUS_LABELS[status]}</Badge>
-          </div>
-          <p className="truncate font-medium text-slate-900">{cloth.customerName}</p>
-          <p className="text-xs text-slate-500">{clothDescription(cloth)} · Pending {formatCurrency(pending)}</p>
-        </div>
-        {open ? (
-          <ChevronUp className="h-5 w-5 shrink-0 text-slate-400" />
-        ) : (
-          <ChevronDown className="h-5 w-5 shrink-0 text-slate-400" />
-        )}
-      </button>
+  async function handleRemovePayout(payout: StaffPayout) {
+    const ids = new Set(payout.clothIds ?? []);
+    const share =
+      payout.qty && payout.qty > 0
+        ? payout.amount / payout.qty
+        : payout.clothIds?.length
+          ? payout.amount / payout.clothIds.length
+          : payout.amount;
+    setBusy(true);
+    setError(null);
+    try {
+      if (ids.size > 0) {
+        for (const cloth of assigned) {
+          if (!ids.has(cloth.id)) continue;
+          const job = jobForStaff(cloth, staff.id, staff.type);
+          const jobs = upsertStaffJob(jobsFromLegacyColumns(cloth), {
+            type: staff.type,
+            staffId: staff.id,
+            amount: job?.amount ?? 0,
+            advance: job?.advance ?? 0,
+            final: Math.max(0, (job?.final ?? 0) - share),
+            remarks: job?.remarks ?? '',
+          });
+          await writeStaffJobs(cloth.id, jobs);
+        }
+      }
+      await updateStaffPayouts(
+        staff.id,
+        liveStaff.payouts.filter((item) => item.id !== payout.id),
+      );
+      onUpdated();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to remove payout');
+    } finally {
+      setBusy(false);
+    }
+  }
 
-      {open && (
-        <div className="border-t border-slate-100 bg-slate-50/80 p-4">
-          {error && (
-            <p className="mb-3 rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-600">{error}</p>
-          )}
-          <StaffPayForm pay={pay} onChange={setPay} />
-          <Button
-            className="mt-4 w-full rounded-full py-3"
-            disabled={busy}
-            onClick={() => void handleSave()}
+  const payForm = (
+    <div className="space-y-3">
+      <div>
+        <p className="text-sm font-semibold text-slate-800">New payout</p>
+        <p className="text-xs text-slate-500">Choose the cloth, how many pieces, then the amount.</p>
+      </div>
+      {unpaidGroups.length === 0 ? (
+        <p className="rounded-xl bg-slate-50 px-3 py-3 text-sm text-slate-500">
+          Nothing pending. All assigned work is paid, or this staff has no cloths yet.
+        </p>
+      ) : (
+        <>
+          <Select
+            label="Product"
+            value={selected?.key ?? ''}
+            onChange={(e) => setProductKey(e.target.value)}
           >
-            <Save className="h-4 w-4" />
-            {busy ? 'Saving...' : 'Save Payment'}
-          </Button>
+            {unpaidGroups.map((group) => (
+              <option key={group.key} value={group.key}>
+                {group.label} · {group.customerName} · {group.unpaidQty} unpaid of {group.totalQty}
+              </option>
+            ))}
+          </Select>
+          {selected && (
+            <p className="text-xs text-slate-500">
+              Rate {formatCurrency(selected.rate)} each · {formatCurrency(selected.pending)} still unpaid
+              {selected.codes.length > 0 ? ` · ${selected.codes.join(', ')}` : ''}
+            </p>
+          )}
+          <div className="grid grid-cols-2 gap-3">
+            <Input
+              label={`Pieces to pay (max ${selected?.unpaidQty ?? 0})`}
+              type="number"
+              min="1"
+              max={selected?.unpaidQty ?? 1}
+              step="1"
+              value={qty}
+              onChange={(e) => {
+                const next = e.target.value;
+                setQty(next);
+                const count = Math.min(
+                  Math.max(1, Math.floor(Number(next)) || 1),
+                  selected?.unpaidQty ?? 1,
+                );
+                if (selected) setAmount(String(Math.round(selected.rate * count * 100) / 100));
+              }}
+            />
+            <Input
+              label="Amount (₹)"
+              type="number"
+              min="0"
+              step="0.01"
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              placeholder={String(suggested || '')}
+            />
+          </div>
+          <Input
+            label="Payout date"
+            type="date"
+            value={date}
+            onChange={(e) => setDate(e.target.value)}
+          />
+          <Input
+            label="Note (optional)"
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="Cash / UPI"
+          />
+        </>
+      )}
+      {error && (
+        <p className="rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-600">{error}</p>
+      )}
+      <Button
+        className="w-full rounded-full py-3"
+        disabled={busy || unpaidGroups.length === 0}
+        onClick={() => void handlePay()}
+      >
+        <Wallet className="h-4 w-4" />
+        {busy
+          ? 'Saving...'
+          : selected
+            ? `Pay ${formatCurrency(parseAmount(amount) || suggested)} for ${payQty} ${selected.label}`
+            : 'Pay'}
+      </Button>
+    </div>
+  );
+
+  const history = (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2">
+        <History className="h-4 w-4 text-slate-400" />
+        <p className="text-sm font-semibold text-slate-800">Previous payouts</p>
+      </div>
+      {ledger.length === 0 ? (
+        <p className="rounded-xl bg-slate-50 px-3 py-3 text-sm text-slate-500">No payouts recorded yet.</p>
+      ) : (
+        <div className="space-y-2">
+          {ledger.map((payout) => (
+            <div
+              key={payout.id}
+              className="flex items-start justify-between gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2.5"
+            >
+              <div className="min-w-0">
+                <p className="font-semibold text-slate-900">{formatCurrency(payout.amount)}</p>
+                <p className="text-sm text-slate-700">{payoutProductLine(payout)}</p>
+                <p className="text-xs text-slate-500">
+                  {formatCalendarDate(payout.date || null)}
+                  {payout.rate ? ` · ${formatCurrency(payout.rate)} each` : ''}
+                  {payout.note ? ` · ${payout.note}` : ''}
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void handleRemovePayout(payout)}
+                className="rounded-lg p-2 text-slate-400 hover:bg-rose-50 hover:text-rose-500"
+                aria-label="Remove payout"
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
+            </div>
+          ))}
         </div>
       )}
-    </Card>
+    </div>
+  );
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-3 gap-2 text-sm">
+        <div className="rounded-xl bg-slate-50 px-3 py-2">
+          <p className="text-xs text-slate-500">To pay</p>
+          <p className="font-semibold text-slate-900">{formatCurrency(summary.totalAmount)}</p>
+        </div>
+        <div className="rounded-xl bg-emerald-50 px-3 py-2">
+          <p className="text-xs text-emerald-700">Paid</p>
+          <p className="font-semibold text-emerald-800">{formatCurrency(summary.paid)}</p>
+        </div>
+        <div className="rounded-xl bg-amber-50 px-3 py-2">
+          <p className="text-xs text-amber-700">Pending</p>
+          <p className="font-semibold text-amber-800">{formatCurrency(summary.totalPending)}</p>
+        </div>
+      </div>
+      <div className={layout === 'split' ? 'grid gap-6 lg:grid-cols-2' : 'space-y-4'}>
+        <div className="rounded-2xl border border-indigo-200 bg-indigo-50/40 p-4">{payForm}</div>
+        <div className="rounded-2xl border border-slate-200 bg-slate-50/60 p-4">{history}</div>
+      </div>
+    </div>
   );
 }
 
@@ -170,103 +378,15 @@ export function StaffPaymentSheet({
   onUpdated: () => void;
 }) {
   useAndroidBackHandler(onClose);
-  const assigned = getStaffCloths(staff.id, staff.type, cloths);
-  const liveStaff: Staff = { ...staff, payouts: staff.payouts ?? [] };
-  const summary = summarizeStaffPayments(liveStaff, cloths);
-  const unpaidGroups = groupClothsForStaffTickets(assigned).map((group) => {
-    const primary = group[0]!;
-    const job = jobForStaff(primary, staff.id, staff.type);
-    const rate = job?.amount ?? getStaffPayFields(primary, staff.type).amount;
-    const pending = group.reduce((sum, piece) => {
-      const pieceJob = jobForStaff(piece, staff.id, staff.type);
-      const amount = pieceJob?.amount ?? rate;
-      return sum + staffPayPending(amount, pieceJob?.advance ?? 0, pieceJob?.final ?? 0);
-    }, 0);
-    return {
-      key: group.map((item) => item.id).sort().join(','),
-      cloths: group,
-      label: clothBillName(primary),
-      qty: group.length,
-      rate,
-      pending,
-      codes: [...new Set(group.map((item) => item.code))],
-    };
-  }).filter((group) => group.pending > 0);
-  const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
-  const [amount, setAmount] = useState('');
-  const [date, setDate] = useState(todayDateString());
-  const [note, setNote] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const ledger = sortStaffPayouts(liveStaff.payouts);
-  const selectedGroups = unpaidGroups.filter((group) => selectedKeys.includes(group.key));
-  const selectedTotal = selectedGroups.reduce((sum, group) => sum + group.pending, 0);
-  const selectedClothIds = selectedGroups.flatMap((group) => group.cloths.map((item) => item.id));
-  const selectedNote =
-    selectedGroups.map((group) => `${group.label} ×${group.qty}`).join(', ') || undefined;
-
-  async function savePayouts(next: StaffPayout[]) {
-    setBusy(true);
-    setError(null);
-    try {
-      await updateStaffPayouts(staff.id, next);
-      onUpdated();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save payout');
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleAddPayout() {
-    const selected = selectedGroups.length > 0;
-    const payoutAmount = selected ? selectedTotal : parseAmount(amount);
-    if (payoutAmount <= 0) {
-      setError(selected ? 'Select unpaid cloths to pay' : 'Enter a payout amount');
-      return;
-    }
-    if (selected) {
-      for (const group of selectedGroups) {
-        for (const piece of group.cloths) {
-          const job = jobForStaff(piece, staff.id, staff.type);
-          const jobs = upsertStaffJob(jobsFromLegacyColumns(piece), {
-            type: staff.type,
-            staffId: staff.id,
-            amount: job?.amount ?? group.rate,
-            advance: job?.advance ?? 0,
-            final: job?.amount ?? group.rate,
-            remarks: job?.remarks ?? '',
-          });
-          await writeStaffJobs(piece.id, jobs);
-        }
-      }
-    }
-    await savePayouts([
-      {
-        id: generateId(),
-        amount: payoutAmount,
-        date: date.trim() || todayDateString(),
-        note: note.trim() || selectedNote,
-        clothIds: selected ? selectedClothIds : undefined,
-      },
-      ...liveStaff.payouts,
-    ]);
-    setAmount('');
-    setNote('');
-    setSelectedKeys([]);
-    setDate(todayDateString());
-  }
 
   return createPortal(
     <div className="fixed inset-0 z-[200] flex items-end justify-center bg-slate-900/40 sm:items-center">
       <button type="button" className="absolute inset-0" aria-label="Close" onClick={onClose} />
-      <div className="relative z-10 max-h-[90dvh] w-full max-w-md overflow-y-auto rounded-t-3xl border border-slate-100 bg-white p-5 shadow-2xl sm:rounded-3xl">
+      <div className="relative z-10 max-h-[90dvh] w-full max-w-lg overflow-y-auto rounded-t-3xl border border-slate-100 bg-white p-5 shadow-2xl sm:rounded-3xl">
         <div className="mb-4 flex items-start justify-between gap-3">
           <div>
             <p className="text-lg font-bold text-slate-900">{staff.name}</p>
-            <p className="text-sm text-slate-500">
-              {assigned.length} cloth{assigned.length === 1 ? '' : 's'} · Pay by cloth and quantity
-            </p>
+            <p className="text-sm text-slate-500">Pay by product and quantity</p>
           </div>
           <button
             type="button"
@@ -276,163 +396,7 @@ export function StaffPaymentSheet({
             <X className="h-5 w-5" />
           </button>
         </div>
-
-        <div className="mb-4 grid grid-cols-2 gap-2 text-sm">
-          <div className="rounded-xl bg-slate-50 px-3 py-2">
-            <p className="text-xs text-slate-500">Total pay</p>
-            <p className="font-semibold text-slate-900">{formatCurrency(summary.totalAmount)}</p>
-          </div>
-          <div className="rounded-xl bg-emerald-50 px-3 py-2">
-            <p className="text-xs text-emerald-700">Paid</p>
-            <p className="font-semibold text-emerald-800">{formatCurrency(summary.paid)}</p>
-          </div>
-          <div className="col-span-2 rounded-xl bg-amber-50 px-3 py-2">
-            <p className="text-xs text-amber-700">Pending to pay</p>
-            <p className="font-semibold text-amber-800">{formatCurrency(summary.totalPending)}</p>
-          </div>
-        </div>
-
-        <div className="mb-4 rounded-2xl border border-indigo-200 bg-indigo-50/50 p-4">
-          <p className="mb-3 text-sm font-semibold text-slate-800">Unpaid work</p>
-          {unpaidGroups.length === 0 ? (
-            <p className="text-xs text-slate-500">No unpaid cloths for this staff.</p>
-          ) : (
-            <div className="mb-3 space-y-2">
-              {unpaidGroups.map((group) => (
-                <label
-                  key={group.key}
-                  className="flex cursor-pointer items-start gap-3 rounded-xl border border-indigo-100 bg-white px-3 py-2"
-                >
-                  <input
-                    type="checkbox"
-                    className="mt-1"
-                    checked={selectedKeys.includes(group.key)}
-                    onChange={(event) => {
-                      setSelectedKeys((current) =>
-                        event.target.checked
-                          ? [...current, group.key]
-                          : current.filter((key) => key !== group.key),
-                      );
-                    }}
-                  />
-                  <span className="min-w-0 flex-1">
-                    <span className="block font-semibold text-slate-900">
-                      {group.label} ×{group.qty}
-                    </span>
-                    <span className="block text-xs text-slate-500">
-                      {formatCurrency(group.rate)} each · {formatCurrency(group.pending)} ·{' '}
-                      {group.codes.join(', ')}
-                    </span>
-                  </span>
-                </label>
-              ))}
-            </div>
-          )}
-          {error && (
-            <p className="mb-3 rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-600">{error}</p>
-          )}
-          {selectedGroups.length === 0 && (
-            <div className="grid grid-cols-2 gap-3">
-              <Input
-                label="Payout amount (₹)"
-                type="number"
-                min="0"
-                step="0.01"
-                value={amount}
-                onChange={(e) => setAmount(e.target.value)}
-                placeholder="500"
-              />
-              <Input
-                label="Payout date"
-                type="date"
-                value={date}
-                onChange={(e) => setDate(e.target.value)}
-                required
-              />
-            </div>
-          )}
-          {selectedGroups.length > 0 && (
-            <Input
-              label="Payout date"
-              type="date"
-              value={date}
-              onChange={(e) => setDate(e.target.value)}
-              required
-            />
-          )}
-          <div className="mt-3">
-            <Input
-              label="Note (optional)"
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-              placeholder={selectedNote ?? 'Cash / UPI'}
-            />
-          </div>
-          <Button
-            className="mt-3 w-full rounded-full py-3"
-            disabled={busy}
-            onClick={() => void handleAddPayout()}
-          >
-            <Plus className="h-4 w-4" />
-            {busy
-              ? 'Saving...'
-              : selectedGroups.length > 0
-                ? `Pay selected (${formatCurrency(selectedTotal)})`
-                : 'Add payout'}
-          </Button>
-
-          {ledger.length === 0 ? (
-            <p className="mt-3 text-xs text-slate-500">No payouts recorded yet.</p>
-          ) : (
-            <div className="mt-3 space-y-2">
-              {ledger.map((payout) => (
-                <div
-                  key={payout.id}
-                  className="flex items-center justify-between gap-3 rounded-xl border border-indigo-100 bg-white px-3 py-2"
-                >
-                  <div className="min-w-0">
-                    <p className="font-semibold text-slate-900">{formatCurrency(payout.amount)}</p>
-                    <p className="text-xs text-slate-500">
-                      {formatCalendarDate(payout.date || null)}
-                      {payout.note ? ` · ${payout.note}` : ''}
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() =>
-                      void savePayouts(liveStaff.payouts.filter((item) => item.id !== payout.id))
-                    }
-                    className="rounded-lg p-2 text-slate-400 hover:bg-rose-50 hover:text-rose-500"
-                    aria-label="Remove payout"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
-          Agreed pay per cloth
-        </p>
-        {assigned.length === 0 ? (
-          <Card className="py-8 text-center text-sm text-slate-500">
-            No cloths assigned to this staff yet.
-          </Card>
-        ) : (
-          <div className="space-y-3">
-            {assigned.map((cloth) => (
-              <ClothStaffPayRow
-                key={cloth.id}
-                cloth={cloth}
-                staff={staff}
-                onSaved={onUpdated}
-              />
-            ))}
-          </div>
-        )}
+        <StaffLedgerPanel staff={staff} cloths={cloths} onUpdated={onUpdated} />
       </div>
     </div>,
     document.body,

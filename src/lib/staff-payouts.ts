@@ -14,6 +14,9 @@ export function parseStaffPayouts(value: unknown): StaffPayout[] {
         date?: unknown;
         note?: unknown;
         clothIds?: unknown;
+        productLabel?: unknown;
+        qty?: unknown;
+        rate?: unknown;
       };
       const amount = Number(record.amount);
       if (!Number.isFinite(amount) || amount <= 0) return null;
@@ -28,6 +31,13 @@ export function parseStaffPayouts(value: unknown): StaffPayout[] {
       if (Array.isArray(record.clothIds)) {
         payout.clothIds = record.clothIds.filter((id): id is string => typeof id === 'string' && Boolean(id));
       }
+      if (typeof record.productLabel === 'string' && record.productLabel.trim()) {
+        payout.productLabel = record.productLabel.trim();
+      }
+      const qty = Number(record.qty);
+      if (Number.isFinite(qty) && qty > 0) payout.qty = Math.floor(qty);
+      const rate = Number(record.rate);
+      if (Number.isFinite(rate) && rate >= 0) payout.rate = rate;
       return payout;
     })
     .filter((item): item is StaffPayout => Boolean(item));

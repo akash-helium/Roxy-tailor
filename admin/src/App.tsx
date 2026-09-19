@@ -2,6 +2,7 @@ import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { AuthProvider } from '@app/contexts/AuthContext';
 import { GarmentCatalogProvider } from '@app/contexts/GarmentCatalogContext';
 import { StaffTypesProvider } from '@app/contexts/StaffTypesContext';
+import { ToastHost } from '@app/components/ui';
 import { ProtectedRoute } from '@app/components/ProtectedRoute';
 import { AdminLayout } from './layouts/AdminLayout';
 import { AdminLoginPage } from './pages/AdminLoginPage';
@@ -33,6 +34,7 @@ export default function App() {
           </Routes>
         </BrowserRouter>
       </div>
+      <ToastHost />
       </StaffTypesProvider>
       </GarmentCatalogProvider>
     </AuthProvider>

@@ -23,6 +23,9 @@ export interface StaffPayout {
   date: string;
   note?: string;
   clothIds?: string[];
+  productLabel?: string;
+  qty?: number;
+  rate?: number;
 }
 
 export interface ClothStaffJob {
