@@ -129,7 +129,7 @@ export function AdminStaffPage() {
   return (
     <AdminPageShell
       title="Staff"
-      subtitle="Manage staff types and people. Payouts are recorded in the shop; view each staff member’s transactions here."
+      subtitle="Manage staff types and people. Payouts happen on the shop floor; open Transactions to read each person’s history."
     >
       {(error || typesError || actionError) && (
         <Card className="border-rose-200 bg-rose-50 text-sm text-rose-700">

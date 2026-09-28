@@ -159,11 +159,14 @@ export function tickedLabelRaster(label: string, width = 576) {
 
 export type EscPosTicket = {
   title: string;
+  headerLines?: string[];
   lines: string[];
   barcodeValue: string;
   raster: Uint8Array;
   headerRaster?: Uint8Array;
   footer?: string;
+  /** Staff tickets: scan code after the date/order header. Customer bills: after totals. */
+  barcodePlacement?: 'middle' | 'end';
 };
 
 export function buildEscPosTicket(ticket: EscPosTicket) {
@@ -181,30 +184,45 @@ export function buildEscPosTicket(ticket: EscPosTicket) {
 
   chunks.push(bytes(GS, 0x21, 0x00), bytes(ESC, 0x61, 0));
 
-  for (const line of ticket.lines) {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      chunks.push(bytes(LF));
-      continue;
+  const pushLines = (lines: string[]) => {
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) {
+        chunks.push(bytes(LF));
+        continue;
+      }
+      if (trimmed.startsWith('!!PENDING ')) {
+        const amount = trimmed.slice('!!PENDING '.length);
+        chunks.push(bytes(GS, 0x21, 0x11), bytes(ESC, 0x45, 1));
+        chunks.push(escPosText(`Pending  ${amount}`), bytes(LF));
+        chunks.push(bytes(GS, 0x21, 0x00), bytes(ESC, 0x45, 1));
+        continue;
+      }
+      if (trimmed.startsWith('!!ITEM ')) {
+        const item = trimmed.slice('!!ITEM '.length);
+        chunks.push(bytes(GS, 0x21, 0x00), bytes(ESC, 0x45, 1));
+        chunks.push(escPosText(item), bytes(LF));
+        continue;
+      }
+      if (/^[✓✔☑√]/.test(trimmed)) {
+        chunks.push(tickedLabelRaster(trimmed.replace(/^[✓✔☑√]\s*/, '')), bytes(LF));
+        continue;
+      }
+      for (const wrapped of wrapEscPosLine(trimmed)) {
+        chunks.push(escPosText(wrapped), bytes(LF));
+      }
     }
-    if (trimmed.startsWith('!!PENDING ')) {
-      const amount = trimmed.slice('!!PENDING '.length);
-      chunks.push(bytes(GS, 0x21, 0x11), bytes(ESC, 0x45, 1));
-      chunks.push(escPosText(`Pending  ${amount}`), bytes(LF));
-      chunks.push(bytes(GS, 0x21, 0x00), bytes(ESC, 0x45, 1));
-      continue;
-    }
-    if (/^[✓✔☑√]/.test(trimmed)) {
-      chunks.push(tickedLabelRaster(trimmed.replace(/^[✓✔☑√]\s*/, '')), bytes(LF));
-      continue;
-    }
-    for (const wrapped of wrapEscPosLine(trimmed)) {
-      chunks.push(escPosText(wrapped), bytes(LF));
-    }
-  }
+  };
 
-  chunks.push(bytes(LF), bytes(ESC, 0x61, 1), ticket.raster, bytes(LF));
-  chunks.push(bytes(GS, 0x21, 0x11), escPosText(ticket.barcodeValue), bytes(LF), bytes(GS, 0x21, 0x00));
+  const pushBarcode = () => {
+    chunks.push(bytes(LF), bytes(ESC, 0x61, 1), ticket.raster, bytes(LF));
+    chunks.push(bytes(GS, 0x21, 0x11), escPosText(ticket.barcodeValue), bytes(LF), bytes(GS, 0x21, 0x00));
+    chunks.push(bytes(ESC, 0x61, 0));
+  };
+
+  pushLines(ticket.headerLines ?? []);
+  if ((ticket.barcodePlacement ?? 'end') === 'middle') pushBarcode();
+  pushLines(ticket.lines);
 
   if (ticket.footer) {
     chunks.push(bytes(LF), bytes(ESC, 0x61, 1));
@@ -213,6 +231,8 @@ export function buildEscPosTicket(ticket: EscPosTicket) {
     }
     chunks.push(bytes(ESC, 0x61, 0));
   }
+
+  if ((ticket.barcodePlacement ?? 'end') === 'end') pushBarcode();
 
   chunks.push(bytes(LF, LF), bytes(GS, 0x56, 0x41, 0x18));
   return concat(...chunks);

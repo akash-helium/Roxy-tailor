@@ -1,8 +1,9 @@
 import type { Cloth, Staff } from '../types';
 import { APP_NAME } from './app-config';
 import { PRINT_BARCODE } from './barcode';
-import { formatCalendarDate, IN_GROUP_TICKET_LABEL, staffClothParts } from './utils';
-import { staffTicketTitle } from './customer-order';
+import { IN_GROUP_TICKET_LABEL } from './utils';
+import { pairMeasurementRows } from './measurements';
+import { buildStaffTicketView } from './print-ticket';
 
 function escapeHtml(value: string) {
   return value
@@ -12,70 +13,75 @@ function escapeHtml(value: string) {
     .replace(/"/g, '&quot;');
 }
 
-/** Full staff barcode card: scannable barcode + order/piece data on one page. */
+/** Full staff barcode card: date/order header, scan code, then garment table. */
 export function buildBarcodeCardHtml(
   cloths: Cloth[],
   barcodeDataUrl: string,
   orderCode: string,
   options?: { cutter?: Staff | null; tailor?: Staff | null; logoDataUrl?: string },
 ) {
-  const primary = cloths[0];
-  if (!primary) return '';
+  const view = buildStaffTicketView(cloths, options);
+  if (!view) return '';
 
-  const { size } = staffClothParts(primary);
-  const garmentLines = `<div class="item">
-      <div class="item-name">${escapeHtml(staffTicketTitle(cloths))}</div>
-      ${size ? `<div class="item-size">${escapeHtml(size)}</div>` : ''}
-    </div>`;
+  const measRows = pairMeasurementRows(view.measurements)
+    .map(([left, right]) => {
+      const rightCell = right
+        ? `<td class="k">${escapeHtml(right.label)}</td><td class="v">${escapeHtml(right.value)}</td>`
+        : `<td class="k"></td><td class="v"></td>`;
+      return `<tr><td class="k">${escapeHtml(left.label)}</td><td class="v">${escapeHtml(left.value)}</td>${rightCell}</tr>`;
+    })
+    .join('');
 
-  const cutter = options?.cutter;
-  const tailor = options?.tailor;
-  const inGroup = cloths.some((cloth) => cloth.inGroup);
+  const details = [
+    view.customerName ? `<div class="meta"><span>Customer</span><strong>${escapeHtml(view.customerName)}</strong></div>` : '',
+    view.qty > 1 ? `<div class="meta"><span>Qty</span><strong>${view.qty}</strong></div>` : '',
+    view.cutterName ? `<div class="meta"><span>Cutter</span><strong>${escapeHtml(view.cutterName)}</strong></div>` : '',
+    view.tailorName ? `<div class="meta"><span>Tailor</span><strong>${escapeHtml(view.tailorName)}</strong></div>` : '',
+    view.deliveryDate ? `<div class="meta"><span>Delivery</span><strong>${escapeHtml(view.deliveryDate)}</strong></div>` : '',
+    view.cutterBy ? `<div class="meta"><span>Cutter by</span><strong>${escapeHtml(view.cutterBy)}</strong></div>` : '',
+    view.tailorBy ? `<div class="meta"><span>Tailor by</span><strong>${escapeHtml(view.tailorBy)}</strong></div>` : '',
+  ]
+    .filter(Boolean)
+    .join('');
 
   return `<!DOCTYPE html><html><head><meta charset="utf-8"/><title>${escapeHtml(orderCode)}</title>
 <style>
 *{-webkit-print-color-adjust:exact;print-color-adjust:exact;color-adjust:exact}
 @page{size:80mm auto;margin:2mm}
 html,body{width:76mm}
-body{font-family:system-ui,-apple-system,'Segoe UI',sans-serif;text-align:center;padding:4mm 2mm;margin:0;color:#000;font-weight:600;background:#fff}
-.logo{display:block;width:18mm;height:18mm;object-fit:contain;margin:0 auto 3mm}
-.shop{font-size:14px;font-weight:900;margin:0 0 4mm;letter-spacing:-0.02em}
-.barcode-wrap{display:block;padding:1mm 0 2mm;background:#fff}
+body{font-family:system-ui,-apple-system,'Segoe UI',sans-serif;text-align:left;padding:3mm 2mm;margin:0;color:#000;background:#fff}
+.shop{font-size:10px;font-weight:800;letter-spacing:0.12em;text-transform:uppercase;text-align:center;margin:0 0 2mm}
+.top{display:flex;justify-content:space-between;align-items:flex-start;gap:4mm;margin:0 0 2mm}
+.date,.order{font-size:12px;font-weight:800;line-height:1.2}
+.order{text-align:right;font-family:ui-monospace,monospace;letter-spacing:0.04em}
+.barcode-wrap{display:block;padding:1mm 0 1.5mm;background:#fff;text-align:center}
 .barcode-wrap img{display:block;width:${PRINT_BARCODE.cssWidth};max-width:${PRINT_BARCODE.cssWidth};height:${PRINT_BARCODE.cssHeight};max-height:${PRINT_BARCODE.cssHeight};object-fit:contain;object-position:center;margin:0 auto;image-rendering:pixelated;image-rendering:crisp-edges}
-.code{font-size:22px;font-weight:900;color:#000;margin:8px 0 6px;letter-spacing:2px;font-family:ui-monospace,monospace}
-.customer{color:#000;font-size:15px;font-weight:800;margin:4px 0 10px}
-.items{margin:0 0 6px}
-.item{color:#000;text-align:left;margin:0 0 8px;padding:0 0 8px;border-bottom:1px dashed #000}
-.item:last-child{margin-bottom:0}
-.item-name{font-size:13px;font-weight:800;line-height:1.35}
-.item-size{margin-top:4px;font-size:11px;font-weight:600;line-height:1.5;white-space:normal;word-break:break-word}
-.item-flag{margin-top:8px;padding-top:8px;border-top:1px dashed #000;font-size:12px;font-weight:800;display:flex;align-items:center;gap:6px;text-align:left}
+.code{font-size:16px;font-weight:900;color:#000;margin:0 0 2.5mm;letter-spacing:1.5px;font-family:ui-monospace,monospace;text-align:center}
+.garment{background:transparent;color:#000;font-size:14px;font-weight:900;padding:0 0 2mm;margin:0;letter-spacing:0.01em;line-height:1.25}
+.meas{width:100%;border-collapse:collapse;margin:0 0 2.5mm;table-layout:fixed}
+.meas td{border:1px solid #000;padding:1.4mm 1.6mm;vertical-align:top}
+.meas .k{width:22%;font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:0.04em}
+.meas .v{width:28%;font-size:12px;font-weight:900}
+.meta{display:flex;justify-content:space-between;gap:3mm;font-size:11px;font-weight:600;margin:1.2mm 0}
+.meta span{color:#000}
+.note{margin-top:2mm;padding-top:2mm;border-top:1px dashed #000;font-size:12px;font-weight:800;line-height:1.35;white-space:pre-wrap;word-break:break-word}
+.item-flag{margin-top:2mm;padding-top:2mm;border-top:1px dashed #000;font-size:12px;font-weight:800;display:flex;align-items:center;gap:6px}
 .tick{display:inline-block;width:0.45em;height:0.85em;border-right:0.22em solid #000;border-bottom:0.22em solid #000;transform:rotate(45deg);margin:0 0.15em 0.2em 0.05em;flex-shrink:0}
-.meta{color:#000;font-size:12px;font-weight:600;margin:3px 0;text-align:left}
-.meta strong{font-weight:800}
-.section{margin-top:8px;padding-top:8px;border-top:1px dashed #000}
-@media print{
-  body{padding:0}
-}
+@media print{body{padding:0}}
 </style></head><body>
-${options?.logoDataUrl ? `<img class="logo" src="${options.logoDataUrl}" alt="${escapeHtml(APP_NAME)}"/>` : ''}
 <div class="shop">${escapeHtml(APP_NAME)}</div>
+<div class="top">
+  <div class="date">${escapeHtml(view.dateLabel || '—')}</div>
+  <div class="order">${escapeHtml(view.orderNumber || orderCode)}</div>
+</div>
 <div class="barcode-wrap">
   <img src="${barcodeDataUrl}" alt="Barcode ${escapeHtml(orderCode)}"/>
 </div>
 <div class="code">${escapeHtml(orderCode)}</div>
-<div class="customer">${escapeHtml(primary.customerName)}</div>
-<div class="items">${garmentLines}</div>
-${cloths.length > 1 ? `<div class="meta">Qty ${cloths.length}</div>` : ''}
-<div class="section">
-${cutter ? `<div class="meta">Cutter: ${escapeHtml(cutter.name)}</div>` : ''}
-${tailor ? `<div class="meta">Tailor: ${escapeHtml(tailor.name)}</div>` : ''}
-${primary.givenDate ? `<div class="meta">Order: ${escapeHtml(formatCalendarDate(primary.givenDate))}</div>` : ''}
-${primary.deliveryDate ? `<div class="meta">Delivery: ${escapeHtml(formatCalendarDate(primary.deliveryDate))}</div>` : ''}
-${primary.cutterExpectedDate ? `<div class="meta">Cutter by: ${escapeHtml(formatCalendarDate(primary.cutterExpectedDate))}</div>` : ''}
-${primary.tailorExpectedDate ? `<div class="meta">Tailor by: ${escapeHtml(formatCalendarDate(primary.tailorExpectedDate))}</div>` : ''}
-${primary.notes?.trim() ? `<div class="meta">Notes: ${escapeHtml(primary.notes.trim())}</div>` : ''}
-</div>
-${inGroup ? `<div class="item-flag"><span class="tick"></span> ${escapeHtml(IN_GROUP_TICKET_LABEL)}</div>` : ''}
+<div class="garment">${escapeHtml(view.garmentTitle)}</div>
+${measRows ? `<table class="meas">${measRows}</table>` : ''}
+${details}
+${view.notes ? `<div class="note">Note: ${escapeHtml(view.notes)}</div>` : ''}
+${view.inGroup ? `<div class="item-flag"><span class="tick"></span> ${escapeHtml(IN_GROUP_TICKET_LABEL)}</div>` : ''}
 </body></html>`;
 }

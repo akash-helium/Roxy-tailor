@@ -1,7 +1,7 @@
 {
   "name": "progress-app",
   "private": true,
-  "version": "1.3.37",
+  "version": "1.3.48",
   "type": "module",
   "main": "electron-main.cjs",
   "scripts": {
@@ -16,6 +16,7 @@
     "build:android": "bun run build:apk",
     "build:android:debug": "bun run build && bunx cap sync android && cd android && ./gradlew assembleDebug && cd .. && node scripts/copy-release-apk.mjs --debug",
     "deploy:android": "node scripts/deploy-android.mjs",
+    "publish:ota": "node scripts/publish-ota.mjs",
     "lint": "eslint .",
     "preview": "vite preview",
     "preview:admin": "vite preview --config admin/vite.config.ts",
@@ -28,6 +29,7 @@
     "@capacitor/core": "^8.3.4",
     "@capacitor/filesystem": "^8.1.2",
     "@capacitor/share": "^8.0.1",
+    "@capgo/capacitor-updater": "^8.51.20",
     "@supabase/supabase-js": "^2.106.2",
     "clsx": "^2.1.1",
     "html5-qrcode": "^2.3.8",
@@ -74,6 +76,7 @@
       "electron-main.cjs",
       "electron-preload.cjs",
       "lib/whatsapp-cloud.cjs",
+      "lib/electron-ota.cjs",
       "package.json"
     ],
     "extraResources": [

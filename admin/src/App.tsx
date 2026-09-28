@@ -17,7 +17,7 @@ export default function App() {
     <AuthProvider>
       <GarmentCatalogProvider>
       <StaffTypesProvider>
-      <div className="min-h-dvh w-full bg-slate-100 text-slate-900">
+      <div className="min-h-dvh w-full bg-white text-ink">
         <BrowserRouter>
           <Routes>
             <Route path="/login" element={<AdminLoginPage />} />

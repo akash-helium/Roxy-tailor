@@ -1,61 +1,31 @@
-import { Banknote, Clock, IndianRupee, Wallet } from 'lucide-react';
-import { clothPendingAmount, clothNetAmount, clothPartPaymentTotal, clothPartPayments, formatCurrency, summarizePayments } from '../lib/payments';
+import { formatCurrency, summarizePayments } from '../lib/payments';
+import { clothPendingAmount, clothNetAmount, clothPartPaymentTotal, clothPartPayments } from '../lib/payments';
 import { formatCalendarDate } from '../lib/utils';
 import type { Cloth } from '../types';
-import { Card } from './ui';
 
 export function PaymentDashboard({ cloths }: { cloths: Cloth[] }) {
   const stats = summarizePayments(cloths);
+  const collected = stats.totalAdvance + stats.totalPart + stats.totalFinal;
 
-  const items = [
-    {
-      label: 'Total Bill',
-      value: stats.totalBill,
-      icon: IndianRupee,
-      tone: 'bg-indigo-50 text-indigo-700',
-    },
-    {
-      label: 'Advance',
-      value: stats.totalAdvance,
-      icon: Wallet,
-      tone: 'bg-emerald-50 text-emerald-700',
-    },
-    {
-      label: 'Part Paid',
-      value: stats.totalPart,
-      icon: Wallet,
-      tone: 'bg-teal-50 text-teal-700',
-    },
-    {
-      label: 'Pending',
-      value: stats.totalPending,
-      icon: Clock,
-      tone: 'bg-amber-50 text-amber-700',
-    },
-    {
-      label: 'Final Paid',
-      value: stats.totalFinal,
-      icon: Banknote,
-      tone: 'bg-sky-50 text-sky-700',
-    },
+  const tiles = [
+    { label: 'Still to collect', value: stats.totalPending, tone: 'text-cut', fill: 'border-cut/30 bg-cut/10' },
+    { label: 'Taken in', value: collected, tone: 'text-done', fill: 'border-done/30 bg-done/10' },
+    { label: 'Billed', value: stats.totalBill, tone: 'text-ink', fill: 'border-seam bg-white' },
+    { label: 'Advance', value: stats.totalAdvance, tone: 'text-ready', fill: 'border-ready/30 bg-ready/10' },
   ];
 
   return (
-    <div className="mb-5">
-      <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Payments</p>
-      <div className="grid grid-cols-2 gap-2">
-        {items.map((item) => (
-          <Card key={item.label} className={`py-3 ${item.tone}`}>
-            <div className="flex items-center gap-2">
-              <item.icon className="h-4 w-4 shrink-0 opacity-80" />
-              <div className="min-w-0">
-                <p className="truncate text-lg font-bold leading-tight">{formatCurrency(item.value)}</p>
-                <p className="text-[10px] font-medium uppercase tracking-wide opacity-80">{item.label}</p>
-              </div>
-            </div>
-          </Card>
-        ))}
-      </div>
+    <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      {tiles.map((item) => (
+        <div key={item.label} className={`rounded-[12px] border p-4 shadow-sm ${item.fill}`}>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-muted">
+            {item.label}
+          </p>
+          <p className={`mt-2 font-display text-2xl font-semibold tabular ${item.tone}`}>
+            {formatCurrency(item.value)}
+          </p>
+        </div>
+      ))}
     </div>
   );
 }
@@ -66,35 +36,43 @@ export function PaymentSummary({ cloth }: { cloth: Cloth }) {
   const hasDiscount = (cloth.discountAmount ?? 0) > 0;
 
   return (
-    <div className="grid grid-cols-2 gap-2 rounded-2xl border border-slate-200 bg-slate-50/80 p-3 text-sm">
+    <div className="grid grid-cols-2 gap-x-4 gap-y-4 rounded-[14px] border border-seam bg-white p-4">
       <div>
-        <p className="text-[10px] font-medium uppercase text-slate-400">Total</p>
-        <p className="font-semibold text-slate-900">{formatCurrency(cloth.totalAmount)}</p>
+        <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-muted">Total</p>
+        <p className="mt-1 font-display text-xl font-bold tabular text-ink">
+          {formatCurrency(cloth.totalAmount)}
+        </p>
       </div>
       {hasDiscount && (
         <div>
-          <p className="text-[10px] font-medium uppercase text-slate-400">Discount</p>
-          <p className="font-semibold text-rose-600">−{formatCurrency(cloth.discountAmount)}</p>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-muted">Discount</p>
+          <p className="mt-1 font-display text-xl font-bold tabular text-overdue">
+            −{formatCurrency(cloth.discountAmount)}
+          </p>
         </div>
       )}
       {hasDiscount && (
         <div>
-          <p className="text-[10px] font-medium uppercase text-slate-400">Net Bill</p>
-          <p className="font-semibold text-slate-900">{formatCurrency(net)}</p>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-muted">Net Bill</p>
+          <p className="mt-1 font-display text-xl font-bold tabular text-ink">{formatCurrency(net)}</p>
         </div>
       )}
       <div>
-        <p className="text-[10px] font-medium uppercase text-slate-400">Advance</p>
-        <p className="font-semibold text-emerald-700">{formatCurrency(cloth.advanceAmount)}</p>
+        <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-muted">Advance</p>
+        <p className="mt-1 font-display text-xl font-bold tabular text-done">
+          {formatCurrency(cloth.advanceAmount)}
+        </p>
         {cloth.advanceDate ? (
-          <p className="text-[10px] text-slate-400">{formatCalendarDate(cloth.advanceDate)}</p>
+          <p className="mt-0.5 text-[11px] text-ink-muted">{formatCalendarDate(cloth.advanceDate)}</p>
         ) : null}
       </div>
       {clothPartPaymentTotal(cloth) > 0 && (
         <div>
-          <p className="text-[10px] font-medium uppercase text-slate-400">Part Paid</p>
-          <p className="font-semibold text-emerald-700">{formatCurrency(clothPartPaymentTotal(cloth))}</p>
-          <p className="text-[10px] text-slate-400">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-muted">Part Paid</p>
+          <p className="mt-1 font-display text-xl font-bold tabular text-done">
+            {formatCurrency(clothPartPaymentTotal(cloth))}
+          </p>
+          <p className="mt-0.5 text-[11px] text-ink-muted">
             {clothPartPayments(cloth)
               .map((item) => `${formatCurrency(item.amount)}${item.date ? ` · ${formatCalendarDate(item.date)}` : ''}`)
               .join(', ')}
@@ -102,14 +80,16 @@ export function PaymentSummary({ cloth }: { cloth: Cloth }) {
         </div>
       )}
       <div>
-        <p className="text-[10px] font-medium uppercase text-slate-400">Pending</p>
-        <p className="font-semibold text-amber-700">{formatCurrency(pending)}</p>
+        <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-muted">Pending</p>
+        <p className="mt-1 font-display text-xl font-bold tabular text-cut">{formatCurrency(pending)}</p>
       </div>
       <div>
-        <p className="text-[10px] font-medium uppercase text-slate-400">Final Paid</p>
-        <p className="font-semibold text-sky-700">{formatCurrency(cloth.finalPaymentAmount)}</p>
+        <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-muted">Final Paid</p>
+        <p className="mt-1 font-display text-xl font-bold tabular text-sew">
+          {formatCurrency(cloth.finalPaymentAmount)}
+        </p>
         {cloth.finalPaymentDate ? (
-          <p className="text-[10px] text-slate-400">{formatCalendarDate(cloth.finalPaymentDate)}</p>
+          <p className="mt-0.5 text-[11px] text-ink-muted">{formatCalendarDate(cloth.finalPaymentDate)}</p>
         ) : null}
       </div>
     </div>

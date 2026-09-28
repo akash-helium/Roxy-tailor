@@ -24,6 +24,49 @@ export function escapeIlike(value: string) {
   return value.replace(/[%_\\]/g, '\\$&');
 }
 
+function compactSearchToken(value: string) {
+  return value.trim().toLowerCase().replace(/[\s-]/g, '');
+}
+
+function phoneSearchDigits(value: string) {
+  return value.replace(/\D/g, '');
+}
+
+/** Tokens for order number (OR-089 / OR089), name, and mobile. */
+export function clothSearchTokens(search: string) {
+  const raw = search.trim();
+  if (!raw) return [];
+  const compact = raw.replace(/[\s-]/g, '');
+  const tokens = [raw];
+  if (compact && compact.toLowerCase() !== raw.toLowerCase()) tokens.push(compact);
+  const coded = compact.match(/^([A-Za-z]+)(\d+)$/);
+  if (coded) tokens.push(`${coded[1]}-${coded[2]}`);
+  const digits = phoneSearchDigits(raw);
+  if (digits.length >= 3) tokens.push(digits);
+  return [...new Set(tokens.map((token) => token.trim()).filter(Boolean))];
+}
+
+export function clothMatchesSearch(cloth: Cloth, search: string) {
+  const query = search.trim().toLowerCase();
+  if (!query) return true;
+  const compact = compactSearchToken(query);
+  const digits = phoneSearchDigits(query);
+  const phone = cloth.customerPhone ?? '';
+  const phoneDigits = phoneSearchDigits(phone);
+  return (
+    cloth.customerName.toLowerCase().includes(query) ||
+    cloth.code.toLowerCase().includes(query) ||
+    compactSearchToken(cloth.code).includes(compact) ||
+    (cloth.orderCode ?? '').toLowerCase().includes(query) ||
+    compactSearchToken(cloth.orderCode ?? '').includes(compact) ||
+    phone.toLowerCase().includes(query) ||
+    (digits.length >= 3 && phoneDigits.includes(digits)) ||
+    cloth.garment.toLowerCase().includes(query) ||
+    cloth.fabricColor.toLowerCase().includes(query) ||
+    cloth.size.toLowerCase().includes(query)
+  );
+}
+
 export function filterCloths(
   cloths: Cloth[],
   status: ClothStatusFilter,
@@ -35,16 +78,9 @@ export function filterCloths(
     list = list.filter((cloth) => cloth.status === status);
   }
 
-  const query = search.trim().toLowerCase();
+  const query = search.trim();
   if (query) {
-    list = list.filter(
-      (cloth) =>
-        cloth.code.toLowerCase().includes(query) ||
-        cloth.customerName.toLowerCase().includes(query) ||
-        cloth.garment.toLowerCase().includes(query) ||
-        cloth.fabricColor.toLowerCase().includes(query) ||
-        cloth.size.toLowerCase().includes(query),
-    );
+    list = list.filter((cloth) => clothMatchesSearch(cloth, query));
   }
 
   return list;
@@ -69,31 +105,31 @@ export const CLOTH_FILTER_OPTIONS: {
   {
     id: 'all',
     label: 'All',
-    activeClass: 'border-indigo-300 bg-indigo-50 text-indigo-700 shadow-sm',
-    countClass: 'bg-indigo-100 text-indigo-700',
+    activeClass: 'border-tab/30 bg-tab/10 text-tab',
+    countClass: 'bg-tab/15 text-tab',
   },
   {
     id: 'cutting',
     label: 'Cutter',
-    activeClass: 'border-amber-300 bg-amber-50 text-amber-800 shadow-sm',
-    countClass: 'bg-amber-100 text-amber-800',
+    activeClass: 'border-cut/30 bg-cut/10 text-cut',
+    countClass: 'bg-cut/15 text-cut',
   },
   {
     id: 'ready_to_sew',
     label: 'Ready',
-    activeClass: 'border-sky-300 bg-sky-50 text-sky-800 shadow-sm',
-    countClass: 'bg-sky-100 text-sky-800',
+    activeClass: 'border-ready/30 bg-ready/10 text-ready',
+    countClass: 'bg-ready/15 text-ready',
   },
   {
     id: 'sewing',
     label: 'Sewing',
-    activeClass: 'border-violet-300 bg-violet-50 text-violet-800 shadow-sm',
-    countClass: 'bg-violet-100 text-violet-800',
+    activeClass: 'border-sew/30 bg-sew/10 text-sew',
+    countClass: 'bg-sew/15 text-sew',
   },
   {
     id: 'completed',
     label: 'Done',
-    activeClass: 'border-emerald-300 bg-emerald-50 text-emerald-800 shadow-sm',
-    countClass: 'bg-emerald-100 text-emerald-800',
+    activeClass: 'border-done/30 bg-done/10 text-done',
+    countClass: 'bg-done/15 text-done',
   },
 ];

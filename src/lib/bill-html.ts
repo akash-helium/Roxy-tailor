@@ -28,7 +28,7 @@ export function buildCustomerBillHtml(
   options?: { copies?: number },
 ) {
   const summary = summarizeCustomerOrder(cloths);
-  const orderCode = summary.codes[0] || summary.codes.join(", ") || "—";
+  const orderCode = summary.orderCode || summary.codes[0] || "—";
   const printedLabel = formatPrintDateTime(printedAt);
   const copies = Math.max(1, Math.min(2, options?.copies ?? 1));
 
@@ -48,6 +48,7 @@ export function buildCustomerBillHtml(
   const barcodeBlock = primaryBarcode
     ? `
     <div class="barcode-block">
+      <div class="barcode-label">Scan to open customer bill</div>
       <img src="${primaryBarcode.dataUrl}" alt="Barcode ${escapeHtml(primaryBarcode.code)}" />
       <div class="barcode-code-lg">${escapeHtml(primaryBarcode.code)}</div>
     </div>`
@@ -186,6 +187,13 @@ export function buildCustomerBillHtml(
     border-top: 2px dashed #000;
   }
   .barcode-block { text-align: center; padding: 4px 0; background: #fff; }
+  .barcode-label {
+    font-size: 10px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    margin-bottom: 6px;
+  }
   .barcode-block img {
     display: block;
     width: 46mm;
@@ -271,10 +279,10 @@ ${Array.from({ length: copies }, () => `  <div class="receipt">
   </div>
   ${summary.notes ? `<div class="notes"><strong>Note:</strong> ${escapeHtml(summary.notes)}</div>` : ""}
   <div class="footer">Thank you for your order - please keep this bill for pickup.</div>
+  <div class="policy">${escapeHtml(BILL_POLICY_NOTE)}</div>
   <div class="barcodes">
     ${barcodeBlock}
   </div>
-  <div class="policy">${escapeHtml(BILL_POLICY_NOTE)}</div>
   </div>`).join("\n")}
 </body></html>`;
 }

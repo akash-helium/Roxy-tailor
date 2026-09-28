@@ -1,5 +1,5 @@
-import { useState, type FormEvent } from 'react';
-import { Plus, Scissors, Shirt, Trash2, Wallet } from 'lucide-react';
+import { useMemo, useState, type FormEvent } from 'react';
+import { Plus, Scissors, Search, Shirt, Trash2, Wallet } from 'lucide-react';
 import { addStaff, removeStaff } from '../lib/data';
 import { useAppData } from '../hooks/useAppData';
 import { formatCurrency, summarizeStaffPayments } from '../lib/payments';
@@ -15,17 +15,51 @@ const emptyForm = {
   notes: '',
 };
 
+function avatarClass(type: string) {
+  if (type === 'cutter') return 'bg-cut/15 text-cut';
+  if (type === 'tailor') return 'bg-sew/15 text-sew';
+  return 'bg-linen text-ink-soft';
+}
+
 export function StaffPage() {
   const { staff, cloths, loading, error, refetch } = useAppData();
   const { types, loading: typesLoading, error: typesError, getLabel } = useStaffTypes();
   const [open, setOpen] = useState(false);
   const [paymentStaff, setPaymentStaff] = useState<Staff | null>(null);
+  const [query, setQuery] = useState('');
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
   const cutters = staff.filter((member) => member.type === 'cutter');
   const tailors = staff.filter((member) => member.type === 'tailor');
+  const payRows = useMemo(
+    () =>
+      staff
+        .map((member) => ({
+          member,
+          pay: summarizeStaffPayments(member, cloths),
+        }))
+        .sort((a, b) => {
+          const pending = b.pay.totalPending - a.pay.totalPending;
+          if (pending !== 0) return pending;
+          return a.member.name.localeCompare(b.member.name);
+        }),
+    [staff, cloths],
+  );
+  const totalPending = payRows.reduce((sum, row) => sum + row.pay.totalPending, 0);
+  const needle = query.trim().toLowerCase();
+  const visible = useMemo(
+    () =>
+      needle
+        ? payRows.filter((row) =>
+            `${row.member.name} ${row.member.phone} ${getLabel(row.member.type)}`
+              .toLowerCase()
+              .includes(needle),
+          )
+        : payRows,
+    [payRows, needle, getLabel],
+  );
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
@@ -63,12 +97,12 @@ export function StaffPage() {
   }
 
   return (
-    <div className="p-5 pb-6">
+    <div className="mx-auto max-w-2xl p-5 pb-6">
       <PageHeader
-        title="Staff"
-        subtitle="Manage staff, agreed pay, and payout ledger"
+        title="Staff pay"
+        subtitle={`Open a person to pay for their work. ${formatCurrency(totalPending)} still due.`}
         action={
-          <Button onClick={() => setOpen(true)} className="rounded-full px-4">
+          <Button onClick={() => setOpen(true)} className="px-4">
             <Plus className="h-4 w-4" />
             Add
           </Button>
@@ -81,27 +115,23 @@ export function StaffPage() {
         </Card>
       )}
 
-      <div className="mb-6 grid grid-cols-2 gap-3">
-        <Card className="bg-amber-50/80">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-100 text-amber-700">
-              <Scissors className="h-5 w-5" />
-            </div>
-            <div>
-              <p className="text-2xl font-bold text-slate-900">{cutters.length}</p>
-              <p className="text-xs text-slate-500">Cutters</p>
-            </div>
+      <div className="mb-4 grid grid-cols-2 gap-3">
+        <Card className="flex items-center gap-3 p-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-cut/15 text-cut">
+            <Scissors className="h-5 w-5" />
+          </div>
+          <div>
+            <p className="font-display text-2xl font-semibold tabular-nums text-ink">{cutters.length}</p>
+            <p className="text-xs text-ink-muted">Cutters</p>
           </div>
         </Card>
-        <Card className="bg-violet-50/80">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-100 text-violet-700">
-              <Shirt className="h-5 w-5" />
-            </div>
-            <div>
-              <p className="text-2xl font-bold text-slate-900">{tailors.length}</p>
-              <p className="text-xs text-slate-500">Tailors</p>
-            </div>
+        <Card className="flex items-center gap-3 p-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-sew/15 text-sew">
+            <Shirt className="h-5 w-5" />
+          </div>
+          <div>
+            <p className="font-display text-2xl font-semibold tabular-nums text-ink">{tailors.length}</p>
+            <p className="text-xs text-ink-muted">Tailors</p>
           </div>
         </Card>
       </div>
@@ -115,60 +145,82 @@ export function StaffPage() {
           </Button>
         </Card>
       ) : (
-        <div className="space-y-3">
-          {staff.map((member) => {
-            const pay = summarizeStaffPayments(member, cloths);
-            return (
-              <Card key={member.id} className="overflow-hidden p-0">
-                <button
-                  type="button"
-                  className="flex w-full items-center justify-between gap-3 p-4 text-left"
-                  onClick={() => setPaymentStaff(member)}
-                >
-                  <div className="flex min-w-0 flex-1 items-center gap-3">
-                    <div
-                      className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl text-sm font-bold ${
-                        member.type === 'cutter'
-                          ? 'bg-amber-100 text-amber-700'
-                          : member.type === 'tailor'
-                            ? 'bg-violet-100 text-violet-700'
-                            : 'bg-slate-100 text-slate-700'
-                      }`}
+        <div className="space-y-2">
+          {staff.length > 8 && (
+            <div className="relative">
+              <Search className="pointer-events-none absolute start-3 top-1/2 h-4 w-4 -translate-y-1/2 text-ink-muted" />
+              <input
+                type="search"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Search staff..."
+                className="w-full rounded-[10px] border border-seam bg-white py-2.5 ps-9 pe-3 text-sm outline-none focus:border-action focus:ring-2 focus:ring-action/20"
+              />
+            </div>
+          )}
+
+          {visible.length === 0 ? (
+            <Card className="py-8 text-center text-sm text-ink-muted">No one matches that search.</Card>
+          ) : (
+            visible.map((row) => {
+              const pending = row.pay.totalPending;
+              const meta = [
+                pending > 0 ? `Still due ${formatCurrency(pending)}` : 'Settled',
+                `${row.pay.clothCount} cloth${row.pay.clothCount === 1 ? '' : 's'}`,
+              ].join(' · ');
+
+              return (
+                <Card key={row.member.id} className="p-0">
+                  <div className="flex items-center gap-2 p-3 sm:gap-3 sm:px-4">
+                    <button
+                      type="button"
+                      onClick={() => setPaymentStaff(row.member)}
+                      className="flex min-w-0 flex-1 items-center gap-3 text-start"
                     >
-                      {member.name.charAt(0).toUpperCase()}
-                    </div>
-                    <div className="min-w-0">
-                      <p className="font-semibold text-slate-900">{member.name}</p>
-                      <div className="mt-1 flex flex-wrap items-center gap-2">
-                        <Badge className={staffTypeBadgeClass(member.type)}>
-                          {getLabel(member.type)}
-                        </Badge>
-                        {member.phone && (
-                          <span className="text-xs text-slate-500">{member.phone}</span>
-                        )}
+                      <div
+                        className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-sm font-bold ${avatarClass(row.member.type)}`}
+                      >
+                        {row.member.name.charAt(0).toUpperCase()}
                       </div>
-                      <p className="mt-1 text-xs text-slate-500">
-                        {pay.clothCount} cloth{pay.clothCount === 1 ? '' : 's'} · Pending{' '}
-                        {formatCurrency(pay.totalPending)}
-                        {pay.ledgerPaid > 0 ? ` · Ledger ${formatCurrency(pay.ledgerPaid)}` : ''}
-                      </p>
-                    </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate font-semibold text-ink">{row.member.name}</p>
+                        <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                          <Badge className={staffTypeBadgeClass(row.member.type)}>
+                            {getLabel(row.member.type)}
+                          </Badge>
+                          {row.member.phone ? (
+                            <span className="text-xs text-ink-muted">{row.member.phone}</span>
+                          ) : null}
+                        </div>
+                        <p className="mt-0.5 truncate text-xs text-ink-muted">{meta}</p>
+                      </div>
+                      {pending > 0 ? (
+                        <span className="shrink-0 font-display text-base font-bold tabular-nums text-cut">
+                          {formatCurrency(pending)}
+                        </span>
+                      ) : null}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPaymentStaff(row.member)}
+                      className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-[10px] bg-action/10 text-action hover:bg-action/15"
+                      aria-label={`Pay ${row.member.name}`}
+                    >
+                      <Wallet className="h-4 w-4" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void handleRemove(row.member.id)}
+                      className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-[10px] bg-linen text-ink-muted hover:bg-rose-50 hover:text-rose-600"
+                      aria-label={`Remove ${row.member.name}`}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
                   </div>
-                  <Wallet className="h-5 w-5 shrink-0 text-indigo-500" />
-                </button>
-                <div className="flex items-center justify-end border-t border-slate-100 px-4 py-2">
-                  <button
-                    type="button"
-                    onClick={() => void handleRemove(member.id)}
-                    className="rounded-xl p-2 text-slate-400 hover:bg-rose-50 hover:text-rose-500"
-                    aria-label={`Remove ${member.name}`}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </button>
-                </div>
-              </Card>
-            );
-          })}
+                </Card>
+              );
+            })
+          )}
         </div>
       )}
 
@@ -182,7 +234,7 @@ export function StaffPage() {
       )}
 
       <Modal open={open} title="Add Staff" onClose={() => setOpen(false)}>
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form onSubmit={handleSubmit} className="grid gap-4 sm:grid-cols-2">
           <Input
             label="Name"
             value={form.name}
@@ -212,13 +264,15 @@ export function StaffPage() {
             onChange={(e) => setForm({ ...form, phone: e.target.value })}
             placeholder="9876543210"
           />
-          <Textarea
-            label="Notes"
-            value={form.notes}
-            onChange={(e) => setForm({ ...form, notes: e.target.value })}
-            placeholder="Optional notes"
-          />
-          <Button type="submit" disabled={saving} className="w-full rounded-full py-3.5">
+          <div className="sm:col-span-2">
+            <Textarea
+              label="Notes"
+              value={form.notes}
+              onChange={(e) => setForm({ ...form, notes: e.target.value })}
+              placeholder="Optional notes"
+            />
+          </div>
+          <Button type="submit" disabled={saving} className="w-full py-3.5 sm:col-span-2">
             {saving ? 'Saving...' : 'Save Staff'}
           </Button>
         </form>

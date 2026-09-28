@@ -22,6 +22,73 @@ function sanitizeTemplateText(value: unknown, max = 60) {
   return (text || '-').slice(0, max);
 }
 
+function templateName() {
+  return trimEnv(Deno.env.get('WHATSAPP_TEMPLATE_NAME')) || 'welcome_message';
+}
+
+function templateLang() {
+  return trimEnv(Deno.env.get('WHATSAPP_TEMPLATE_LANG')) || 'en_US';
+}
+
+function templateBodyParamCount() {
+  const raw = trimEnv(Deno.env.get('WHATSAPP_TEMPLATE_BODY_PARAMS'));
+  if (raw === '') return 0;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? Math.min(n, 10) : 0;
+}
+
+function richAutomateErrorMessage(data: Record<string, unknown>, status: number) {
+  if (typeof data.error === 'string') return data.error;
+  if (typeof data.message === 'string') return data.message;
+  const errors = data.errors as Record<string, string[]> | undefined;
+  const firstError = errors && Object.values(errors).flat()[0];
+  if (firstError) return String(firstError);
+  return `RichAutomate API error ${status}`;
+}
+
+async function sendRichAutomate(apiKey: string, payload: {
+  phone: string;
+  name?: string;
+  orderNumber?: string;
+  items?: string;
+}) {
+  const baseUrl = (trimEnv(Deno.env.get('RICHAUTOMATE_API_URL')) || 'https://richautomate.in/api/v1').replace(
+    /\/$/,
+    '',
+  );
+  const paramCount = templateBodyParamCount();
+  const variables: string[] = [];
+  if (paramCount > 0) {
+    const values = [
+      sanitizeTemplateText(payload.name),
+      sanitizeTemplateText(payload.orderNumber, 24),
+      sanitizeTemplateText(payload.items, 120),
+    ];
+    for (let i = 0; i < paramCount; i += 1) {
+      variables.push(values[i] || '-');
+    }
+  }
+  const body: Record<string, unknown> = {
+    phone: payload.phone,
+    template: templateName(),
+    language: templateLang(),
+  };
+  if (variables.length > 0) body.variables = variables;
+
+  const res = await fetch(`${baseUrl}/send-template`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+  const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!res.ok || data.success === false) {
+    throw new Error(richAutomateErrorMessage(data, res.status));
+  }
+}
+
 async function postGraphMessage(
   token: string,
   url: string,
@@ -55,19 +122,19 @@ Deno.serve(async (req) => {
     return json({ ok: false, status: 'failed', message: 'Method not allowed' }, 405);
   }
 
+  const richKey = trimEnv(Deno.env.get('RICHAUTOMATE_API_KEY'));
   const token = trimEnv(Deno.env.get('WHATSAPP_TOKEN') ?? Deno.env.get('WHATSAPP_ACCESS_TOKEN'));
   const phoneNumberId = trimEnv(Deno.env.get('WHATSAPP_PHONE_NUMBER_ID'));
-  const templateName = trimEnv(Deno.env.get('WHATSAPP_TEMPLATE_NAME'));
-  const templateLang = trimEnv(Deno.env.get('WHATSAPP_TEMPLATE_LANG')) || 'en';
+  const graphTemplateName = trimEnv(Deno.env.get('WHATSAPP_TEMPLATE_NAME'));
   const graphVersion = trimEnv(Deno.env.get('WHATSAPP_GRAPH_VERSION')) || 'v21.0';
 
-  if (!token || !phoneNumberId) {
+  if (!richKey && (!token || !phoneNumberId)) {
     return json(
       {
         ok: false,
         status: 'unconfigured',
         message:
-          'WhatsApp Business API is not set up. Add WHATSAPP_TOKEN and WHATSAPP_PHONE_NUMBER_ID as function secrets.',
+          'WhatsApp is not set up. Add RICHAUTOMATE_API_KEY as a function secret.',
       },
       501,
     );
@@ -91,33 +158,53 @@ Deno.serve(async (req) => {
     return json({ ok: false, status: 'failed', message: 'Invalid WhatsApp number' }, 400);
   }
 
-  const url = `https://graph.facebook.com/${graphVersion}/${phoneNumberId}/messages`;
-  const base = {
-    messaging_product: 'whatsapp',
-    recipient_type: 'individual',
-    to,
-  };
-
   try {
-    if (templateName) {
+    if (richKey) {
+      await sendRichAutomate(richKey, {
+        phone: to,
+        name: payload.name,
+        orderNumber: payload.orderNumber,
+        items: payload.items,
+      });
+      return json({
+        ok: true,
+        status: 'sent',
+        via: 'richautomate',
+        message: 'WhatsApp confirmation sent',
+      });
+    }
+
+    const url = `https://graph.facebook.com/${graphVersion}/${phoneNumberId}/messages`;
+    const base = {
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to,
+    };
+
+    if (graphTemplateName) {
       try {
+        const template: Record<string, unknown> = {
+          name: graphTemplateName,
+          language: { code: templateLang() },
+        };
+        const paramCount = templateBodyParamCount();
+        if (paramCount > 0) {
+          const values = [
+            sanitizeTemplateText(payload.name),
+            sanitizeTemplateText(payload.orderNumber, 24),
+            sanitizeTemplateText(payload.items, 120),
+          ];
+          template.components = [
+            {
+              type: 'body',
+              parameters: values.slice(0, paramCount).map((text) => ({ type: 'text', text })),
+            },
+          ];
+        }
         await postGraphMessage(token, url, {
           ...base,
           type: 'template',
-          template: {
-            name: templateName,
-            language: { code: templateLang },
-            components: [
-              {
-                type: 'body',
-                parameters: [
-                  { type: 'text', text: sanitizeTemplateText(payload.name) },
-                  { type: 'text', text: sanitizeTemplateText(payload.orderNumber, 24) },
-                  { type: 'text', text: sanitizeTemplateText(payload.items, 120) },
-                ],
-              },
-            ],
-          },
+          template,
         });
         return json({ ok: true, status: 'sent', via: 'template', message: 'WhatsApp confirmation sent' });
       } catch (error) {

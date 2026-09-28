@@ -49,6 +49,55 @@ export function clothSizeSummary(cloth: Pick<Cloth, 'garmentType' | 'measurement
   return cloth.size?.trim() ?? '';
 }
 
+export type MeasurementCell = { label: string; value: string };
+
+/** Filled measurement fields as label/value cells for staff tickets. */
+export function listFilledMeasurements(
+  garmentTypeId: string | null,
+  measurements: Record<string, string> = {},
+  fallbackSize = '',
+): MeasurementCell[] {
+  const garment = getGarmentType(garmentTypeId);
+  if (garment) {
+    const cells = garment.fields
+      .map((field) => {
+        const raw = measurements[field.id]?.trim();
+        if (!raw) return null;
+        const kind = measurementFieldType(field);
+        if (kind === 'boolean') {
+          return isMeasurementOn(raw) ? { label: field.label, value: 'Yes' } : null;
+        }
+        if (kind === 'select') {
+          const option = field.options?.find((item) => item.id === raw || item.label === raw);
+          return { label: field.label, value: option?.label ?? raw };
+        }
+        return { label: field.label, value: `${raw}"` };
+      })
+      .filter((cell): cell is MeasurementCell => Boolean(cell));
+    if (cells.length > 0) return cells;
+  }
+
+  const loose = Object.entries(measurements)
+    .map(([key, value]) => {
+      const trimmed = value.trim();
+      if (!trimmed) return null;
+      return { label: key, value: trimmed };
+    })
+    .filter((cell): cell is MeasurementCell => Boolean(cell));
+  if (loose.length > 0) return loose;
+
+  const size = fallbackSize.trim();
+  return size ? [{ label: 'Size', value: size }] : [];
+}
+
+export function pairMeasurementRows(cells: MeasurementCell[]) {
+  const rows: [MeasurementCell, MeasurementCell | null][] = [];
+  for (let i = 0; i < cells.length; i += 2) {
+    rows.push([cells[i]!, cells[i + 1] ?? null]);
+  }
+  return rows;
+}
+
 export function parseJsonRecord<T extends Record<string, unknown>>(value: unknown, fallback: T): T {
   if (value && typeof value === 'object' && !Array.isArray(value)) {
     return value as T;
@@ -94,6 +143,7 @@ export function parseMeasurementChecks(value: unknown): {
   finalPaymentDate: string;
   deliveryDate: string;
   orderBatchId: string;
+  orderCode: string;
   staffJobs: ClothStaffJob[];
   customerPhone: string;
 } {
@@ -105,6 +155,7 @@ export function parseMeasurementChecks(value: unknown): {
     finalPaymentDate: typeof record.finalPaymentDate === 'string' ? record.finalPaymentDate : '',
     deliveryDate: typeof record.deliveryDate === 'string' ? record.deliveryDate : '',
     orderBatchId: typeof record.orderBatchId === 'string' ? record.orderBatchId : '',
+    orderCode: typeof record.orderCode === 'string' ? record.orderCode.trim() : '',
     staffJobs: parseClothStaffJobs(record.staffJobs),
     customerPhone: typeof record.customerPhone === 'string' ? record.customerPhone.trim() : '',
   };
@@ -117,6 +168,7 @@ export function measurementChecksPayload(input: {
   finalPaymentDate?: string | null;
   deliveryDate?: string | null;
   orderBatchId?: string | null;
+  orderCode?: string | null;
   staffJobs?: ClothStaffJob[];
   customerPhone?: string | null;
 }): Json {
@@ -127,6 +179,7 @@ export function measurementChecksPayload(input: {
     finalPaymentDate: input.finalPaymentDate?.trim() || '',
     deliveryDate: input.deliveryDate?.trim() || '',
     orderBatchId: input.orderBatchId?.trim() || '',
+    orderCode: input.orderCode?.trim() || '',
     staffJobs: input.staffJobs ?? [],
     customerPhone: input.customerPhone?.trim() || '',
   } as unknown as Json;

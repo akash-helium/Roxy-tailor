@@ -75,7 +75,7 @@ export function GarmentSizingForm({
           <button
             type="button"
             onClick={() => void reload()}
-            className="mt-2 text-xs font-semibold text-indigo-600 underline"
+            className="mt-2 text-xs font-semibold text-action underline"
           >
             Retry loading cloth types
           </button>
@@ -131,11 +131,11 @@ export function GarmentSizingForm({
             ) : null}
           </p>
           {hasRememberedSizes ? (
-            <p className="mb-2 text-xs font-medium text-indigo-600">
-              Last sizes for this customer were filled. You can edit them.
+            <p className="mb-2 text-xs font-medium text-action">
+              Last sizes for this person were filled. You can edit them.
             </p>
           ) : null}
-          <div className={layout === 'wide' ? 'grid grid-cols-2 gap-3 xl:grid-cols-3' : 'grid grid-cols-2 gap-3'}>
+          <div className={layout === 'wide' ? 'grid grid-cols-2 gap-3 lg:grid-cols-3' : 'grid grid-cols-2 gap-3'}>
             {garment.fields.map((field) => {
               const kind = measurementFieldType(field);
               if (kind === 'boolean') {
@@ -151,7 +151,7 @@ export function GarmentSizingForm({
                       onChange={(event) =>
                         setMeasurement(field.id, event.target.checked ? 'yes' : '')
                       }
-                      className="h-5 w-5 shrink-0 rounded border-slate-300 accent-indigo-600"
+                      className="h-5 w-5 shrink-0 rounded border-seam accent-action"
                     />
                     <span className="text-sm font-medium text-slate-800">{field.label}</span>
                   </label>
@@ -191,12 +191,12 @@ export function GarmentSizingForm({
         </div>
       )}
 
-      <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-indigo-200 bg-indigo-50/50 px-4 py-3">
+      <label className="flex cursor-pointer items-start gap-3 rounded-[14px] border border-action/20 bg-action/5 px-4 py-3">
         <input
           type="checkbox"
           checked={value.inGroup}
           onChange={(e) => onChange({ ...value, inGroup: e.target.checked })}
-          className="mt-0.5 h-5 w-5 shrink-0 rounded border-slate-300 accent-indigo-600"
+          className="mt-0.5 h-5 w-5 shrink-0 rounded border-seam accent-action"
         />
         <span>
           <span className="block text-sm font-semibold text-slate-800">

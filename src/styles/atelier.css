@@ -1,0 +1,101 @@
+@import "tailwindcss";
+
+@source "../**/*.{ts,tsx}";
+@source "../../admin/src/**/*.{ts,tsx}";
+
+@theme {
+  --font-sans: "Lato", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Poppins", ui-sans-serif, system-ui, sans-serif;
+  --font-ticket: "Lato", ui-sans-serif, system-ui, sans-serif;
+
+  --color-ink: #111827;
+  --color-ink-soft: #374151;
+  --color-ink-muted: #6b7280;
+  --color-chalk: #ffffff;
+  --color-paper: #ffffff;
+  --color-ticket: #ffffff;
+  --color-linen: #f3f4f6;
+  --color-seam: #d1d5db;
+  --color-stitch: #c81e1e;
+  --color-stitch-deep: #9f1239;
+  --color-action: #2563eb;
+  --color-action-deep: #1d4ed8;
+  --color-tab: #0f766e;
+  --color-tab-deep: #115e59;
+  --color-brass: #d97706;
+  --color-brass-soft: #f59e0b;
+  --color-cut: #ea580c;
+  --color-sew: #7c3aed;
+  --color-ready: #2563eb;
+  --color-done: #059669;
+  --color-overdue: #dc2626;
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+}
+
+:root {
+  font-family: var(--font-sans);
+  line-height: 1.45;
+  font-weight: 400;
+  color-scheme: light;
+  color: var(--color-ink);
+  background-color: #ffffff;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  min-height: 100dvh;
+  background: #ffffff;
+}
+
+.font-display {
+  font-family: var(--font-display);
+}
+
+.ticket {
+  background: #ffffff;
+  border: 1px solid #d1d5db;
+  box-shadow: 0 1px 2px rgb(17 24 39 / 0.06), 0 4px 12px rgb(17 24 39 / 0.04);
+}
+
+.ticket-stub {
+  position: relative;
+  background: #ffffff;
+  border: 1px solid #d1d5db;
+  box-shadow: 0 1px 2px rgb(17 24 39 / 0.06), 0 4px 12px rgb(17 24 39 / 0.04);
+}
+
+.ticket-stub::before {
+  content: "";
+  position: absolute;
+  inset: 10px auto 10px 0;
+  width: 4px;
+  background: var(--color-tab);
+  border-radius: 0 4px 4px 0;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+.stage-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+}

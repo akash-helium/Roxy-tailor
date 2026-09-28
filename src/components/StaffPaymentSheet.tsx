@@ -13,10 +13,18 @@ import {
 } from '../lib/payments';
 import { formatCalendarDate, generateId, todayDateString } from '../lib/utils';
 import { jobForStaff, jobsFromLegacyColumns, upsertStaffJob } from '../lib/staff-jobs';
-import { payoutProductLine, unpaidStaffGroups } from '../lib/staff-ledger';
+import {
+  allocatePayout,
+  payoutProductLine,
+  selectedLineDue,
+  staffPayRoleLine,
+  staffWorkGroups,
+  workLineQtyCopy,
+} from '../lib/staff-ledger';
 import { sortStaffPayouts } from '../lib/staff-payouts';
+import { useStaffTypes } from '../contexts/StaffTypesContext';
 import { useAndroidBackHandler } from '../hooks/useAndroidBackHandler';
-import { Button, Input, Select, Textarea, showToast } from './ui';
+import { Button, Input, Textarea, showToast } from './ui';
 
 function StaffPayForm({
   pay,
@@ -29,6 +37,7 @@ function StaffPayForm({
 
   return (
     <div className="space-y-3">
+      <div className="grid gap-3 sm:grid-cols-3">
       <Input
         label="Pay Amount (₹)"
         type="number"
@@ -56,9 +65,10 @@ function StaffPayForm({
         onChange={(e) => onChange({ ...pay, final: parseAmount(e.target.value) })}
         placeholder="Final payment to staff"
       />
-      <div className="rounded-xl bg-white px-3 py-2 text-sm">
-        <span className="text-slate-500">Pending: </span>
-        <strong className="text-amber-700">{formatCurrency(pending)}</strong>
+      </div>
+      <div className="rounded-[10px] bg-ticket px-3 py-2 text-sm">
+        <span className="text-ink-muted">Pending: </span>
+        <strong className="tabular text-cut">{formatCurrency(pending)}</strong>
       </div>
       <Textarea
         label="Remarks"
@@ -82,89 +92,111 @@ export function StaffLedgerPanel({
   onUpdated: () => void;
   layout?: 'stack' | 'split';
 }) {
+  const { getLabel } = useStaffTypes();
   const assigned = getStaffCloths(staff.id, staff.type, cloths);
   const liveStaff: Staff = { ...staff, payouts: staff.payouts ?? [] };
   const summary = summarizeStaffPayments(liveStaff, cloths);
-  const unpaidGroups = unpaidStaffGroups(liveStaff, cloths);
+  const workGroups = staffWorkGroups(liveStaff, cloths);
+  const payableGroups = workGroups.filter((group) => !group.needsRate && group.pending > 0);
   const ledger = sortStaffPayouts(liveStaff.payouts);
-  const [productKey, setProductKey] = useState('');
-  const [qty, setQty] = useState('1');
+  const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
+  const [payNowByKey, setPayNowByKey] = useState<Record<string, number>>({});
   const [amount, setAmount] = useState('');
   const [date, setDate] = useState(todayDateString());
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const selected = unpaidGroups.find((group) => group.key === productKey) ?? unpaidGroups[0] ?? null;
+  const payableKeySig = payableGroups.map((group) => group.key).join('|');
 
   useEffect(() => {
-    if (!selected) {
-      setProductKey('');
-      setQty('1');
-      setAmount('');
-      return;
-    }
-    setProductKey(selected.key);
-    setQty('1');
-    setAmount(String(Math.round(selected.rate * 100) / 100));
-  }, [selected?.key, selected?.rate]);
+    setSelectedKeys(payableGroups.map((group) => group.key));
+    setPayNowByKey(Object.fromEntries(payableGroups.map((group) => [group.key, group.unpaidQty])));
+    // payableGroups is derived from cloths/staff; signature is the stable dep
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [staff.id, payableKeySig]);
 
-  const payQty = useMemo(() => {
-    const parsed = Math.floor(Number(qty));
-    if (!selected) return 1;
-    if (!Number.isFinite(parsed) || parsed < 1) return 1;
-    return Math.min(parsed, selected.unpaidQty);
-  }, [qty, selected]);
+  const selectedGroups = useMemo(
+    () => payableGroups.filter((group) => selectedKeys.includes(group.key)),
+    [payableGroups, selectedKeys],
+  );
 
-  const suggested = selected ? Math.round(selected.rate * payQty * 100) / 100 : 0;
+  const selectedDue = useMemo(
+    () =>
+      Math.round(
+        selectedGroups.reduce(
+          (sum, group) =>
+            sum + selectedLineDue(group, payNowByKey[group.key] ?? group.unpaidQty, staff),
+          0,
+        ) * 100,
+      ) / 100,
+    [selectedGroups, payNowByKey, staff],
+  );
+
+  useEffect(() => {
+    setAmount(selectedDue > 0 ? String(selectedDue) : '');
+  }, [selectedDue]);
+
+  const payoutAmount = parseAmount(amount) || selectedDue;
+  const canPay = selectedGroups.length > 0 && payoutAmount > 0 && !busy;
 
   async function handlePay() {
-    if (!selected) {
-      setError('No unpaid product for this staff');
+    if (selectedGroups.length === 0) {
+      setError('Tick the work you are paying for');
       return;
     }
-    const payoutAmount = parseAmount(amount) || suggested;
     if (payoutAmount <= 0) {
       setError('Enter the amount you are paying');
       return;
     }
-    const pieces = selected.unpaid.slice(0, payQty);
-    if (pieces.length === 0) {
-      setError('Select how many pieces to pay');
+    const allocations = allocatePayout(
+      liveStaff,
+      selectedGroups.map((group) => ({
+        group,
+        payNowQty: payNowByKey[group.key] ?? group.unpaidQty,
+      })),
+      payoutAmount,
+    );
+    if (allocations.length === 0) {
+      setError('Tick the work you are paying for');
       return;
     }
-    const perPiece = Math.round((payoutAmount / pieces.length) * 100) / 100;
     setBusy(true);
     setError(null);
     try {
-      for (const piece of pieces) {
-        const job = jobForStaff(piece, staff.id, staff.type);
-        const pieceAmount = job?.amount || selected.rate || perPiece;
-        const nextFinal = Math.min(pieceAmount, (job?.final ?? 0) + perPiece);
-        const jobs = upsertStaffJob(jobsFromLegacyColumns(piece), {
-          type: staff.type,
-          staffId: staff.id,
-          amount: pieceAmount,
-          advance: job?.advance ?? 0,
-          final: nextFinal,
-          remarks: job?.remarks ?? '',
-        });
-        await writeStaffJobs(piece.id, jobs);
+      for (const line of allocations) {
+        for (const { cloth, pay } of line.piecePays) {
+          const job = jobForStaff(cloth, staff.id, staff.type);
+          const pieceAmount = job?.amount || line.rate || pay;
+          const nextFinal = Math.min(pieceAmount, (job?.final ?? 0) + pay);
+          const jobs = upsertStaffJob(jobsFromLegacyColumns(cloth), {
+            type: staff.type,
+            staffId: staff.id,
+            amount: pieceAmount,
+            advance: job?.advance ?? 0,
+            final: nextFinal,
+            remarks: job?.remarks ?? '',
+          });
+          await writeStaffJobs(cloth.id, jobs);
+        }
       }
-      await updateStaffPayouts(staff.id, [
-        {
-          id: generateId(),
-          amount: payoutAmount,
-          date: date.trim() || todayDateString(),
-          note: note.trim() || undefined,
-          clothIds: pieces.map((item) => item.id),
-          productLabel: `${selected.label} · ${selected.customerName}`,
-          qty: pieces.length,
-          rate: selected.rate,
-        },
-        ...liveStaff.payouts,
-      ]);
-      showToast(`Paid ${formatCurrency(payoutAmount)} for ${pieces.length} ${selected.label}`);
+      const paidTotal = allocations.reduce((sum, line) => sum + line.amount, 0);
+      const newRows: StaffPayout[] = allocations.map((line) => ({
+        id: generateId(),
+        amount: line.amount,
+        date: date.trim() || todayDateString(),
+        note: note.trim() || undefined,
+        clothIds: line.clothIds,
+        productLabel: `${line.group.label} · ${line.group.customerName}`,
+        qty: line.qty,
+        rate: line.rate,
+      }));
+      await updateStaffPayouts(staff.id, [...newRows, ...liveStaff.payouts]);
+      const toast =
+        allocations.length === 1
+          ? `Paid ${formatCurrency(paidTotal)} for ${allocations[0]!.qty} ${allocations[0]!.group.label}`
+          : `Paid ${formatCurrency(paidTotal)} for ${allocations.length} jobs`;
+      showToast(toast);
       setNote('');
       setDate(todayDateString());
       onUpdated();
@@ -176,6 +208,8 @@ export function StaffLedgerPanel({
   }
 
   async function handleRemovePayout(payout: StaffPayout) {
+    const ok = window.confirm('This puts that work back in still due.');
+    if (!ok) return;
     const ids = new Set(payout.clothIds ?? []);
     const share =
       payout.qty && payout.qty > 0
@@ -214,52 +248,103 @@ export function StaffLedgerPanel({
   }
 
   const payForm = (
-    <div className="space-y-3">
+    <div className="space-y-4">
       <div>
-        <p className="text-sm font-semibold text-slate-800">New payout</p>
-        <p className="text-xs text-slate-500">Choose the cloth, how many pieces, then the amount.</p>
+        <p className="text-sm font-semibold text-slate-800">Pay now</p>
+        <p className="text-xs text-slate-500">Tick the work you are paying for. Still due is work not paid yet.</p>
       </div>
-      {unpaidGroups.length === 0 ? (
+      {workGroups.length === 0 ? (
         <p className="rounded-xl bg-slate-50 px-3 py-3 text-sm text-slate-500">
-          Nothing pending. All assigned work is paid, or this staff has no cloths yet.
+          Nothing still due. All assigned work is paid, or this person has no cloths yet.
         </p>
       ) : (
+        <div className="space-y-2">
+          {workGroups.map((group) => {
+            const checked = selectedKeys.includes(group.key);
+            const payNow = payNowByKey[group.key] ?? group.unpaidQty;
+            const lineDue = group.needsRate
+              ? 0
+              : selectedLineDue(group, checked ? payNow : group.unpaidQty, liveStaff);
+            return (
+              <div
+                key={group.key}
+                className={`rounded-xl border px-3 py-3 ${
+                  group.needsRate
+                    ? 'border-amber-200 bg-amber-50/70'
+                    : checked
+                      ? 'border-action/30 bg-white'
+                      : 'border-slate-200 bg-white'
+                }`}
+              >
+                <label className="flex cursor-pointer items-start gap-3">
+                  <input
+                    type="checkbox"
+                    className="mt-1 h-4 w-4 shrink-0 rounded border-slate-300 text-action focus:ring-action/30"
+                    checked={checked}
+                    disabled={group.needsRate}
+                    onChange={() => {
+                      setSelectedKeys((current) =>
+                        current.includes(group.key)
+                          ? current.filter((key) => key !== group.key)
+                          : [...current, group.key],
+                      );
+                    }}
+                  />
+                  <span className="min-w-0 flex-1">
+                    <span className="flex items-start justify-between gap-3">
+                      <span>
+                        <span className="block font-semibold text-slate-900">{group.label}</span>
+                        <span className="block text-sm text-slate-600">{group.customerName}</span>
+                      </span>
+                      {!group.needsRate ? (
+                        <span className="shrink-0 font-semibold tabular-nums text-slate-900">
+                          {formatCurrency(checked ? lineDue : group.pending)}
+                        </span>
+                      ) : null}
+                    </span>
+                    {group.needsRate ? (
+                      <span className="mt-1 block text-xs text-amber-800">
+                        No rate set — add cutter/tailor rate for this cloth type
+                      </span>
+                    ) : (
+                      <span className="mt-1 block text-xs text-slate-500">
+                        {workLineQtyCopy(group)}
+                        {' · '}
+                        {formatCurrency(group.rate)} each
+                      </span>
+                    )}
+                  </span>
+                </label>
+                {!group.needsRate && checked && group.unpaidQty > 1 ? (
+                  <div className="mt-3 ps-7">
+                    <Input
+                      label={`How many ${group.label} to pay now`}
+                      type="number"
+                      min="1"
+                      max={group.unpaidQty}
+                      step="1"
+                      value={String(payNow)}
+                      onChange={(e) => {
+                        const count = Math.min(
+                          Math.max(1, Math.floor(Number(e.target.value)) || 1),
+                          group.unpaidQty,
+                        );
+                        setPayNowByKey((current) => ({ ...current, [group.key]: count }));
+                      }}
+                    />
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {payableGroups.length > 0 ? (
         <>
-          <Select
-            label="Product"
-            value={selected?.key ?? ''}
-            onChange={(e) => setProductKey(e.target.value)}
-          >
-            {unpaidGroups.map((group) => (
-              <option key={group.key} value={group.key}>
-                {group.label} · {group.customerName} · {group.unpaidQty} unpaid of {group.totalQty}
-              </option>
-            ))}
-          </Select>
-          {selected && (
-            <p className="text-xs text-slate-500">
-              Rate {formatCurrency(selected.rate)} each · {formatCurrency(selected.pending)} still unpaid
-              {selected.codes.length > 0 ? ` · ${selected.codes.join(', ')}` : ''}
-            </p>
-          )}
+          <p className="text-sm text-slate-600">
+            Selected {formatCurrency(selectedDue)}
+          </p>
           <div className="grid grid-cols-2 gap-3">
-            <Input
-              label={`Pieces to pay (max ${selected?.unpaidQty ?? 0})`}
-              type="number"
-              min="1"
-              max={selected?.unpaidQty ?? 1}
-              step="1"
-              value={qty}
-              onChange={(e) => {
-                const next = e.target.value;
-                setQty(next);
-                const count = Math.min(
-                  Math.max(1, Math.floor(Number(next)) || 1),
-                  selected?.unpaidQty ?? 1,
-                );
-                if (selected) setAmount(String(Math.round(selected.rate * count * 100) / 100));
-              }}
-            />
             <Input
               label="Amount (₹)"
               type="number"
@@ -267,15 +352,15 @@ export function StaffLedgerPanel({
               step="0.01"
               value={amount}
               onChange={(e) => setAmount(e.target.value)}
-              placeholder={String(suggested || '')}
+              placeholder={String(selectedDue || '')}
+            />
+            <Input
+              label="Pay date"
+              type="date"
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
             />
           </div>
-          <Input
-            label="Payout date"
-            type="date"
-            value={date}
-            onChange={(e) => setDate(e.target.value)}
-          />
           <Input
             label="Note (optional)"
             value={note}
@@ -283,21 +368,17 @@ export function StaffLedgerPanel({
             placeholder="Cash / UPI"
           />
         </>
-      )}
+      ) : null}
       {error && (
         <p className="rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-600">{error}</p>
       )}
-      <Button
-        className="w-full rounded-full py-3"
-        disabled={busy || unpaidGroups.length === 0}
-        onClick={() => void handlePay()}
-      >
+      <Button className="w-full rounded-full py-3" disabled={!canPay} onClick={() => void handlePay()}>
         <Wallet className="h-4 w-4" />
         {busy
           ? 'Saving...'
-          : selected
-            ? `Pay ${formatCurrency(parseAmount(amount) || suggested)} for ${payQty} ${selected.label}`
-            : 'Pay'}
+          : selectedGroups.length === 0
+            ? 'Tick the work you are paying for'
+            : `Pay ${formatCurrency(payoutAmount)} to ${staff.name}`}
       </Button>
     </div>
   );
@@ -306,10 +387,10 @@ export function StaffLedgerPanel({
     <div className="space-y-3">
       <div className="flex items-center gap-2">
         <History className="h-4 w-4 text-slate-400" />
-        <p className="text-sm font-semibold text-slate-800">Previous payouts</p>
+        <p className="text-sm font-semibold text-slate-800">Already paid</p>
       </div>
       {ledger.length === 0 ? (
-        <p className="rounded-xl bg-slate-50 px-3 py-3 text-sm text-slate-500">No payouts recorded yet.</p>
+        <p className="rounded-xl bg-slate-50 px-3 py-3 text-sm text-slate-500">No payments yet.</p>
       ) : (
         <div className="space-y-2">
           {ledger.map((payout) => (
@@ -331,7 +412,7 @@ export function StaffLedgerPanel({
                 disabled={busy}
                 onClick={() => void handleRemovePayout(payout)}
                 className="rounded-lg p-2 text-slate-400 hover:bg-rose-50 hover:text-rose-500"
-                aria-label="Remove payout"
+                aria-label="Undo payment"
               >
                 <Trash2 className="h-4 w-4" />
               </button>
@@ -344,22 +425,24 @@ export function StaffLedgerPanel({
 
   return (
     <div className="space-y-4">
+      <p className="text-sm text-slate-600">{staffPayRoleLine(staff.type, getLabel(staff.type))}</p>
       <div className="grid grid-cols-3 gap-2 text-sm">
         <div className="rounded-xl bg-slate-50 px-3 py-2">
           <p className="text-xs text-slate-500">To pay</p>
           <p className="font-semibold text-slate-900">{formatCurrency(summary.totalAmount)}</p>
         </div>
         <div className="rounded-xl bg-emerald-50 px-3 py-2">
-          <p className="text-xs text-emerald-700">Paid</p>
+          <p className="text-xs text-emerald-700">Already paid</p>
           <p className="font-semibold text-emerald-800">{formatCurrency(summary.paid)}</p>
         </div>
         <div className="rounded-xl bg-amber-50 px-3 py-2">
-          <p className="text-xs text-amber-700">Pending</p>
+          <p className="text-xs text-amber-700">Still due</p>
           <p className="font-semibold text-amber-800">{formatCurrency(summary.totalPending)}</p>
         </div>
       </div>
+      <p className="text-xs text-slate-500">Still due is work not paid yet.</p>
       <div className={layout === 'split' ? 'grid gap-6 lg:grid-cols-2' : 'space-y-4'}>
-        <div className="rounded-2xl border border-indigo-200 bg-indigo-50/40 p-4">{payForm}</div>
+        <div className="rounded-[14px] border border-action/20 bg-action/5 p-4">{payForm}</div>
         <div className="rounded-2xl border border-slate-200 bg-slate-50/60 p-4">{history}</div>
       </div>
     </div>
@@ -380,13 +463,13 @@ export function StaffPaymentSheet({
   useAndroidBackHandler(onClose);
 
   return createPortal(
-    <div className="fixed inset-0 z-[200] flex items-end justify-center bg-slate-900/40 sm:items-center">
+    <div className="fixed inset-0 z-[200] flex items-end justify-center bg-ink/40 sm:items-center sm:p-6">
       <button type="button" className="absolute inset-0" aria-label="Close" onClick={onClose} />
-      <div className="relative z-10 max-h-[90dvh] w-full max-w-lg overflow-y-auto rounded-t-3xl border border-slate-100 bg-white p-5 shadow-2xl sm:rounded-3xl">
+      <div className="relative z-10 max-h-[90dvh] w-full overflow-y-auto rounded-t-[18px] border border-seam bg-ticket p-5 shadow-xl sm:max-h-[min(90dvh,860px)] sm:w-[min(64rem,calc(100vw-3rem))] sm:rounded-[18px] sm:p-6">
         <div className="mb-4 flex items-start justify-between gap-3">
           <div>
             <p className="text-lg font-bold text-slate-900">{staff.name}</p>
-            <p className="text-sm text-slate-500">Pay by product and quantity</p>
+            <p className="text-sm text-slate-500">Pay for this work</p>
           </div>
           <button
             type="button"
@@ -396,7 +479,7 @@ export function StaffPaymentSheet({
             <X className="h-5 w-5" />
           </button>
         </div>
-        <StaffLedgerPanel staff={staff} cloths={cloths} onUpdated={onUpdated} />
+        <StaffLedgerPanel staff={staff} cloths={cloths} onUpdated={onUpdated} layout="split" />
       </div>
     </div>,
     document.body,

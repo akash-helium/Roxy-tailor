@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import type { Cloth } from "../types";
 import { generateBarcodeDataUrl, PRINT_BARCODE } from "../lib/barcode";
+import { customerBillScanCode } from "../lib/scan-basket";
 import { buildCustomerBillHtml, type BillBarcode } from "../lib/bill-html";
 import { summarizeCustomerOrder, groupClothsForCustomerBill, customerBillItemLabel } from "../lib/customer-order";
 import { formatCurrency } from "../lib/payments";
@@ -60,20 +61,23 @@ export function CustomerBillPrintSheet({
     document.body.style.overflow = "hidden";
     setLoading(true);
     setError(null);
-    const orderCode = sorted[0]?.code?.trim();
-    if (!orderCode) {
+    const scanCode = customerBillScanCode(
+      sorted.find((item) => item.orderCode)?.orderCode?.trim() || "",
+      sorted[0]?.code?.trim() || "",
+    );
+    if (!scanCode) {
       setBarcodes([]);
       setLoading(false);
       return;
     }
 
-    generateBarcodeDataUrl(orderCode, {
+    generateBarcodeDataUrl(scanCode, {
       height: PRINT_BARCODE.height,
       moduleWidth: PRINT_BARCODE.moduleWidth,
       maxWidth: PRINT_BARCODE.maxWidth,
       displayValue: false,
     })
-      .then((dataUrl) => setBarcodes([{ code: orderCode, dataUrl }]))
+      .then((dataUrl) => setBarcodes([{ code: scanCode, dataUrl }]))
       .catch(() => setError("Could not generate barcode for bill"))
       .finally(() => setLoading(false));
 
@@ -114,7 +118,10 @@ export function CustomerBillPrintSheet({
         const result = await printThermalTicket({
           title: APP_NAME,
           headerImageUrl: logoDataUrl || undefined,
-          barcodeValue: summary.codes[0] ?? "Order",
+          barcodeValue: customerBillScanCode(
+            summary.orderCode,
+            summary.codes[0] || "",
+          ),
           lines: buildCustomerBillTicketLines(sorted),
           footer: BILL_POLICY_NOTE,
           copies: 2,
@@ -193,7 +200,7 @@ export function CustomerBillPrintSheet({
 
   if (sorted.length === 0) return null;
 
-  const billLabel = summary.codes[0] ?? "Order";
+  const billLabel = summary.orderCode || summary.codes[0] || "Order";
 
   return createPortal(
     <div className="fixed inset-0 z-[200] flex flex-col bg-slate-100">
@@ -202,7 +209,7 @@ export function CustomerBillPrintSheet({
         style={{ paddingTop: "max(12px, var(--app-safe-top, 0px))" }}
       >
         <h2 className="flex items-center gap-2 font-bold text-slate-900">
-          <Receipt className="h-5 w-5 text-indigo-600" />
+          <Receipt className="h-5 w-5 text-action" />
           Customer Bill · {billLabel}
         </h2>
         <button
@@ -259,9 +266,14 @@ export function CustomerBillPrintSheet({
               <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
                 Order Code
               </p>
-              <p className="font-mono text-sm font-semibold text-indigo-600">
-                {summary.codes[0] ?? "—"}
+              <p className="font-mono text-sm font-semibold text-ink">
+                {summary.orderCode || summary.codes[0] || "—"}
               </p>
+              {summary.orderCode && summary.codes.length > 0 ? (
+                <p className="mt-0.5 font-mono text-[11px] text-slate-500">
+                  Cloths {summary.codes.length <= 4 ? summary.codes.join(" · ") : `${summary.codes[0]} – ${summary.codes[summary.codes.length - 1]}`}
+                </p>
+              ) : null}
             </div>
             {summary.givenDate ? (
               <div>
@@ -333,9 +345,15 @@ export function CustomerBillPrintSheet({
             Thank you for your order — please keep this bill for pickup.
           </p>
 
-          <div className="mt-5 border-t-2 border-dashed border-indigo-200 pt-4">
+          <div className="mt-3 border-t border-dashed border-slate-200 pt-3 text-center text-[11px] leading-relaxed text-slate-700">
+            <p className="whitespace-normal break-words text-center">
+              {BILL_POLICY_NOTE}
+            </p>
+          </div>
+
+          <div className="mt-5 border-t-2 border-dashed border-seam pt-4">
             <p className="mb-3 text-center text-[10px] font-semibold uppercase tracking-widest text-slate-400">
-              Scan barcode for tracking
+              Scan to open customer bill
             </p>
             {loading && (
               <p className="animate-pulse text-center text-sm text-slate-400">
@@ -351,18 +369,12 @@ export function CustomerBillPrintSheet({
                     className="mx-auto w-[180px] bg-white"
                     style={{ imageRendering: "pixelated" }}
                   />
-                  <p className="font-mono text-xs font-bold text-indigo-700">
+                  <p className="font-mono text-xs font-bold text-ink">
                     {b.code}
                   </p>
                 </div>
               ))}
             </div>
-          </div>
-
-          <div className="mt-3 border-t border-dashed border-slate-200 pt-3 text-center text-[11px] leading-relaxed text-slate-700">
-            <p className="whitespace-normal break-words text-center">
-              {BILL_POLICY_NOTE}
-            </p>
           </div>
         </div>
 

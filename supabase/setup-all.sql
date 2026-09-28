@@ -125,6 +125,7 @@ create table if not exists public.cloths (
   given_date date,
   cutter_expected_date date,
   tailor_expected_date date,
+  order_code text not null default '',
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -132,6 +133,7 @@ create table if not exists public.cloths (
 create index if not exists cloths_user_id_idx on public.cloths (user_id);
 create index if not exists cloths_code_idx on public.cloths (code);
 create index if not exists cloths_user_id_code_idx on public.cloths (user_id, code);
+create index if not exists cloths_user_id_order_code_idx on public.cloths (user_id, order_code);
 
 alter table public.cloths enable row level security;
 

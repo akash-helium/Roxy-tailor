@@ -1,8 +1,13 @@
 import { createRequire } from 'node:module'
+import { readFileSync } from 'node:fs'
 import type { IncomingMessage } from 'node:http'
 import { defineConfig, loadEnv, type Plugin, type ViteDevServer } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
+
+const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as {
+  version: string
+}
 
 const require = createRequire(import.meta.url)
 const { sendWhatsAppFromPayload } = require('./lib/whatsapp-cloud.cjs') as {
@@ -49,11 +54,15 @@ function whatsappDevApi(env: Record<string, string>): Plugin {
         .then((payload) =>
           sendWhatsAppFromPayload(payload, {
             ...process.env,
+            RICHAUTOMATE_API_KEY: env.RICHAUTOMATE_API_KEY || process.env.RICHAUTOMATE_API_KEY,
+            RICHAUTOMATE_API_URL: env.RICHAUTOMATE_API_URL || process.env.RICHAUTOMATE_API_URL,
             WHATSAPP_TOKEN: env.WHATSAPP_TOKEN || process.env.WHATSAPP_TOKEN,
             WHATSAPP_ACCESS_TOKEN: env.WHATSAPP_ACCESS_TOKEN || process.env.WHATSAPP_ACCESS_TOKEN,
             WHATSAPP_PHONE_NUMBER_ID: env.WHATSAPP_PHONE_NUMBER_ID || process.env.WHATSAPP_PHONE_NUMBER_ID,
             WHATSAPP_TEMPLATE_NAME: env.WHATSAPP_TEMPLATE_NAME || process.env.WHATSAPP_TEMPLATE_NAME,
             WHATSAPP_TEMPLATE_LANG: env.WHATSAPP_TEMPLATE_LANG || process.env.WHATSAPP_TEMPLATE_LANG,
+            WHATSAPP_TEMPLATE_BODY_PARAMS:
+              env.WHATSAPP_TEMPLATE_BODY_PARAMS || process.env.WHATSAPP_TEMPLATE_BODY_PARAMS,
             WHATSAPP_GRAPH_VERSION: env.WHATSAPP_GRAPH_VERSION || process.env.WHATSAPP_GRAPH_VERSION,
           }),
         )
@@ -87,11 +96,31 @@ function whatsappDevApi(env: Record<string, string>): Plugin {
   }
 }
 
+function otaMetaPlugin(env: Record<string, string>): Plugin {
+  const supabaseUrl = (env.VITE_SUPABASE_URL || env.NEXT_PUBLIC_SUPABASE_URL || '').replace(/\/$/, '')
+  const manifestUrl =
+    env.VITE_OTA_MANIFEST_URL ||
+    (supabaseUrl ? `${supabaseUrl}/storage/v1/object/public/app-ota/latest.json` : '')
+  return {
+    name: 'ota-meta',
+    generateBundle() {
+      this.emitFile({
+        type: 'asset',
+        fileName: 'ota.json',
+        source: `${JSON.stringify({ version: pkg.version, manifestUrl }, null, 2)}\n`,
+      })
+    },
+  }
+}
+
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
   return {
-    base: process.env.ELECTRON === '1' ? './' : '/',
+    base: './',
     envPrefix: ['VITE_', 'NEXT_PUBLIC_'],
-    plugins: [react(), tailwindcss(), whatsappDevApi(env)],
+    define: {
+      'import.meta.env.VITE_APP_VERSION': JSON.stringify(pkg.version),
+    },
+    plugins: [react(), tailwindcss(), whatsappDevApi(env), otaMetaPlugin(env)],
   }
 })

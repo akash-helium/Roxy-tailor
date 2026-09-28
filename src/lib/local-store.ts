@@ -1,5 +1,6 @@
 import type { AppData, Cloth, ClothStatus, DatedAmount, Staff, StaffPayout, StaffType } from "../types";
-import { generateId, nextClothCodes } from "./utils";
+import { generateId, nextClothCodes, generateOrderCode } from "./utils";
+import { collectedOrderCodes } from "./customer-order";
 import { parseDatedAmounts } from "./measurements";
 import { parseClothStaffJobs, applyLegacyPayColumns, jobsFromLegacyColumns } from "./staff-jobs";
 import { parseStaffPayouts, splitStaffNotes } from "./staff-payouts";
@@ -45,6 +46,11 @@ function read(): AppData {
           cloth.orderBatchId ??
           (cloth as { measurementChecks?: { orderBatchId?: string } })
             .measurementChecks?.orderBatchId ??
+          "",
+        orderCode:
+          cloth.orderCode ??
+          (cloth as { measurementChecks?: { orderCode?: string } })
+            .measurementChecks?.orderCode ??
           "",
         totalAmount: cloth.totalAmount ?? 0,
         discountAmount: cloth.discountAmount ?? 0,
@@ -196,6 +202,7 @@ export function registerClothOrderLocal(
     tailorPayAmount?: number;
     code?: string;
     orderBatchId?: string;
+    orderCode?: string;
     staffJobs?: import("../types").ClothStaffJob[];
   }[],
 ) {
@@ -205,6 +212,9 @@ export function registerClothOrderLocal(
   const now = new Date().toISOString();
   const usedCodes = [...new Set(data.cloths.map((item) => item.code))];
   const generated = nextClothCodes(usedCodes, inputs.length);
+  const orderCode =
+    inputs.find((input) => input.orderCode?.trim())?.orderCode?.trim() ||
+    generateOrderCode(collectedOrderCodes(data.cloths));
 
   const created: Cloth[] = inputs.map((input, index) => {
     const cloth: Cloth = {
@@ -220,6 +230,7 @@ export function registerClothOrderLocal(
       measurements: input.measurements,
       inGroup: input.inGroup,
       orderBatchId: input.orderBatchId?.trim() || "",
+      orderCode: input.orderCode?.trim() || orderCode,
       notes: input.notes,
       status: "cutting",
       cutterId: input.cutterId || null,
@@ -341,11 +352,37 @@ export function updateClothSizeLocal(id: string, size: string) {
   return updateClothLocal(id, { size });
 }
 
+export function updateClothNotesLocal(id: string, notes: string) {
+  return updateClothLocal(id, { notes });
+}
+
 export function getClothByCodeLocal(code: string) {
   const normalized = code.trim().toUpperCase();
+  const hyphenated =
+    /^OR\d+$/i.test(normalized) ? `OR-${normalized.slice(2)}` : normalized;
   return (
     read().cloths.find((cloth) => cloth.code.toUpperCase() === normalized) ??
+    read().cloths.find(
+      (cloth) =>
+        cloth.orderCode?.toUpperCase() === normalized ||
+        cloth.orderCode?.toUpperCase() === hyphenated,
+    ) ??
     null
+  );
+}
+
+export function listClothsByOrderCodeLocal(code: string) {
+  const normalized = code.trim().toUpperCase();
+  const hyphenated =
+    /^OR\d+$/i.test(normalized) ? `OR-${normalized.slice(2)}` : normalized;
+  const matches = read().cloths.filter(
+    (cloth) =>
+      cloth.orderCode?.toUpperCase() === normalized ||
+      cloth.orderCode?.toUpperCase() === hyphenated,
+  );
+  return matches.sort(
+    (a, b) =>
+      a.createdAt.localeCompare(b.createdAt) || a.code.localeCompare(b.code),
   );
 }
 

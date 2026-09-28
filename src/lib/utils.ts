@@ -9,13 +9,25 @@ export function generateId() {
   return crypto.randomUUID();
 }
 
-export function generateClothCode(existingCodes: string[]) {
+export function generatePrefixedCode(prefix: string, existingCodes: string[]) {
+  const pattern = new RegExp(`^${prefix}-?(\\d+)$`, 'i');
   const numbers = existingCodes
-    .map((code) => Number.parseInt(code.replace(/\D/g, ''), 10))
+    .map((code) => {
+      const match = code.trim().match(pattern);
+      return match ? Number.parseInt(match[1] ?? '', 10) : Number.NaN;
+    })
     .filter((value) => !Number.isNaN(value));
 
   const next = numbers.length > 0 ? Math.max(...numbers) + 1 : 1;
-  return `CL-${String(next).padStart(3, '0')}`;
+  return `${prefix}-${String(next).padStart(3, '0')}`;
+}
+
+export function generateClothCode(existingCodes: string[]) {
+  return generatePrefixedCode('CL', existingCodes);
+}
+
+export function generateOrderCode(existingCodes: string[]) {
+  return generatePrefixedCode('OR', existingCodes);
 }
 
 export function nextClothCodes(existingCodes: string[], count: number) {

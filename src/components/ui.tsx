@@ -21,6 +21,9 @@ function scrollFieldIntoView(element: HTMLElement) {
   });
 }
 
+const fieldClass =
+  'w-full rounded-[10px] border border-seam bg-white px-3.5 py-2.5 text-ink outline-none transition placeholder:text-ink-muted/70 focus:border-action focus:bg-white focus:ring-2 focus:ring-action/20';
+
 export function PageHeader({
   title,
   subtitle,
@@ -31,10 +34,12 @@ export function PageHeader({
   action?: React.ReactNode;
 }) {
   return (
-    <header className="mb-6 flex flex-wrap items-start justify-between gap-3">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight text-slate-900">{title}</h1>
-        {subtitle && <p className="mt-1 text-sm text-slate-500">{subtitle}</p>}
+    <header className="mb-5 flex flex-wrap items-start justify-between gap-3">
+      <div className="min-w-0">
+        <h1 className="font-display text-[1.65rem] font-semibold leading-tight tracking-tight text-ink text-balance">
+          {title}
+        </h1>
+        {subtitle && <p className="mt-1 text-sm text-ink-muted text-pretty">{subtitle}</p>}
       </div>
       {action}
     </header>
@@ -51,7 +56,7 @@ export function Card({
   return (
     <div
       className={cn(
-        'rounded-2xl border border-slate-100 bg-white p-4 shadow-sm shadow-slate-200/60',
+        'ticket rounded-[14px] p-4 shadow-sm shadow-ink/5',
         className,
       )}
     >
@@ -70,7 +75,7 @@ export function Badge({
   return (
     <span
       className={cn(
-        'inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold',
+        'inline-flex items-center rounded-md border px-2 py-0.5 text-[11px] font-semibold tracking-wide',
         className,
       )}
     >
@@ -81,26 +86,35 @@ export function Badge({
 
 export function Button({
   variant = 'primary',
+  size = 'md',
+  type = 'button',
   className,
   children,
   ...props
 }: React.ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: 'primary' | 'secondary' | 'ghost' | 'danger';
+  size?: 'md' | 'sm';
 }) {
   const variants = {
     primary:
-      'bg-indigo-600 text-white shadow-lg shadow-indigo-600/25 hover:bg-indigo-700 active:scale-[0.98]',
+      'bg-action text-white hover:bg-action-deep active:scale-[0.97]',
     secondary:
-      'border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 active:scale-[0.98]',
-    ghost: 'text-slate-600 hover:bg-slate-100 active:scale-[0.98]',
+      'border border-seam bg-linen text-ink hover:bg-white hover:border-ink/20 active:scale-[0.97]',
+    ghost: 'border border-transparent text-ink-soft hover:bg-linen hover:text-ink active:scale-[0.97]',
     danger:
-      'bg-rose-500 text-white shadow-lg shadow-rose-500/25 hover:bg-rose-600 active:scale-[0.98]',
+      'bg-overdue text-white hover:bg-overdue/90 active:scale-[0.97]',
+  };
+  const sizes = {
+    md: 'min-h-11 gap-2 rounded-[10px] px-4 py-2.5 text-sm',
+    sm: 'min-h-8 gap-1.5 rounded-full px-2.5 py-1 text-xs',
   };
 
   return (
     <button
+      type={type}
       className={cn(
-        'inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition-all disabled:cursor-not-allowed disabled:opacity-50',
+        'inline-flex shrink-0 items-center justify-center font-semibold transition-[transform,background-color,opacity] duration-150 disabled:cursor-not-allowed disabled:opacity-50',
+        sizes[size],
         variants[variant],
         className,
       )}
@@ -119,13 +133,10 @@ export function Input({
 }: React.InputHTMLAttributes<HTMLInputElement> & { label: string }) {
   return (
     <label className="block">
-      <span className="mb-1.5 block text-sm font-medium text-slate-700">{label}</span>
+      <span className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.08em] text-ink-muted">{label}</span>
       <input
         data-allow-typing
-        className={cn(
-          'w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-slate-900 outline-none transition focus:border-indigo-400 focus:bg-white focus:ring-2 focus:ring-indigo-100',
-          className,
-        )}
+        className={cn(fieldClass, className)}
         onFocus={(event) => {
           scrollFieldIntoView(event.currentTarget);
           onFocus?.(event);
@@ -258,7 +269,9 @@ export function Select({
       return haystack.includes(needle);
     });
   }, [items, query]);
-  const activeItem = items.find((item) => item.value === currentValue);
+  const activeItem =
+    items.find((item) => item.value === currentValue) ??
+    (currentValue === '' ? items.find((item) => item.value === '') : undefined);
   const displayText: ReactNode = activeItem
     ? activeItem.label
     : placeholder ?? 'Select…';
@@ -378,8 +391,8 @@ export function Select({
           setOpen((prev) => !prev);
         }}
         className={cn(
-          'flex w-full items-center justify-between gap-2 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-left text-slate-900 outline-none transition focus:border-indigo-400 focus:bg-white focus:ring-2 focus:ring-indigo-100 disabled:cursor-not-allowed disabled:opacity-60',
-          open && 'border-indigo-400 bg-white ring-2 ring-indigo-100',
+          'flex w-full items-center justify-between gap-2 rounded-[10px] border border-seam bg-white px-3.5 py-2.5 text-left text-ink outline-none transition focus:border-action focus:bg-white focus:ring-2 focus:ring-action/20 disabled:cursor-not-allowed disabled:opacity-60',
+          open && 'border-action bg-white ring-2 ring-action/20',
           className,
         )}
       >
@@ -441,7 +454,7 @@ export function Select({
                     if (first) commit(first.value);
                   }}
                   placeholder="Search..."
-                  className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 outline-none focus:border-indigo-400 focus:bg-white focus:ring-2 focus:ring-indigo-100"
+                  className={cn(fieldClass, 'py-2 text-sm')}
                 />
               </div>
             )}
@@ -482,8 +495,8 @@ export function Select({
                         'flex w-full items-center justify-between gap-2 px-4 py-2.5 text-left text-sm transition',
                         item.disabled
                           ? 'cursor-not-allowed text-slate-300'
-                          : 'text-slate-700 hover:bg-indigo-50 hover:text-indigo-700',
-                        isActive && 'bg-indigo-50 font-semibold text-indigo-700',
+                          : 'text-ink-soft hover:bg-linen hover:text-action',
+                        isActive && 'bg-action/10 font-semibold text-action',
                       )}
                     >
                       <span className="flex-1 truncate">{item.label}</span>
@@ -533,13 +546,10 @@ export function Textarea({
 }: React.TextareaHTMLAttributes<HTMLTextAreaElement> & { label: string }) {
   return (
     <label className="block">
-      <span className="mb-1.5 block text-sm font-medium text-slate-700">{label}</span>
+      <span className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.08em] text-ink-muted">{label}</span>
       <textarea
         data-allow-typing
-        className={cn(
-          'min-h-[80px] w-full resize-none rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-slate-900 outline-none transition focus:border-indigo-400 focus:bg-white focus:ring-2 focus:ring-indigo-100',
-          className,
-        )}
+        className={cn(fieldClass, 'min-h-[80px] resize-none', className)}
         onFocus={(event) => {
           scrollFieldIntoView(event.currentTarget);
           onFocus?.(event);
@@ -561,7 +571,7 @@ export function Modal({
   title: string;
   onClose: () => void;
   children: React.ReactNode;
-  size?: 'md' | 'wide';
+  size?: 'md' | 'lg' | 'wide';
 }) {
   useAndroidBackHandler(onClose, open);
   const viewport = useVisualViewport(open);
@@ -577,41 +587,39 @@ export function Modal({
 
   if (!open) return null;
 
+  const widths = {
+    md: 'sm:max-h-[min(88dvh,760px)] sm:w-[min(36rem,calc(100vw-3rem))]',
+    lg: 'sm:max-h-[min(90dvh,860px)] sm:w-[min(56rem,calc(100vw-3rem))]',
+    wide: 'sm:max-h-[min(92dvh,920px)] sm:w-[min(74rem,calc(100vw-3rem))]',
+  };
+
   return createPortal(
     <div
-      className="fixed left-0 z-[100] flex w-full flex-col justify-end bg-slate-900/40 sm:inset-0 sm:justify-center sm:p-4"
+      className="fixed left-0 z-[100] flex w-full flex-col justify-end bg-ink/40 sm:inset-0 sm:items-center sm:justify-center sm:p-6"
       style={{ top: viewport.offsetTop, height: viewport.height }}
     >
       <button type="button" className="absolute inset-0" aria-label="Close" onClick={onClose} />
       <div
         className={cn(
-          'relative z-10 flex max-h-full w-full flex-col overflow-hidden rounded-t-3xl border border-slate-100 bg-white shadow-2xl sm:mx-auto sm:rounded-3xl',
-          size === 'wide'
-            ? 'sm:max-h-[min(94dvh,960px)] sm:w-[calc(100vw-2rem)] sm:max-w-none'
-            : 'sm:max-h-[min(90dvh,720px)] sm:max-w-md',
+          'ticket relative z-10 flex max-h-[92dvh] w-full flex-col overflow-hidden rounded-t-[18px] sm:mx-auto sm:rounded-[18px]',
+          widths[size],
         )}
       >
         <div
-          className={cn(
-            'flex shrink-0 items-center justify-between border-b border-slate-100 pb-4',
-            size === 'wide' ? 'px-5 sm:px-6' : 'px-5',
-          )}
+          className="flex shrink-0 items-center justify-between border-b border-seam px-5 pb-4 sm:px-6"
           style={{ paddingTop: 'max(16px, var(--app-safe-top, 0px))' }}
         >
-          <h2 className="text-lg font-bold text-slate-900">{title}</h2>
+          <h2 className="font-display text-lg font-semibold text-ink">{title}</h2>
           <button
             type="button"
             onClick={onClose}
-            className="rounded-lg px-2 py-1 text-sm text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+            className="min-h-11 min-w-11 rounded-[8px] px-2 py-1 text-sm text-ink-muted hover:bg-paper hover:text-ink"
           >
             ✕
           </button>
         </div>
         <div
-          className={cn(
-            'min-h-0 flex-1 overflow-y-auto overscroll-contain pt-4',
-            size === 'wide' ? 'px-5 sm:px-6' : 'px-5',
-          )}
+          className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pt-4 sm:px-6"
           style={{ paddingBottom: 'max(24px, var(--app-safe-bottom, 0px))' }}
         >
           {children}
@@ -650,7 +658,7 @@ export function ToastHost() {
 
   return createPortal(
     <div className="pointer-events-none fixed inset-x-0 bottom-8 z-[400] flex justify-center px-4">
-      <div className="flex items-center gap-2 rounded-full bg-slate-900 px-4 py-2.5 text-sm font-medium text-white shadow-lg">
+      <div className="flex items-center gap-2 rounded-[10px] bg-ink px-4 py-2.5 text-sm font-medium text-paper shadow-lg">
         <CheckCircle2 className="h-4 w-4 text-emerald-400" />
         {message}
       </div>

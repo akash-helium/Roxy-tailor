@@ -8,11 +8,12 @@ import { buildBarcodeCardHtml } from '../lib/barcode-card-html';
 import { exportBarcodeForNative, isNativeApp } from '../lib/barcode-export';
 import { printBillHtml } from '../lib/bill-export';
 import { canPrintThermal, printThermalTicket } from '../lib/thermal-print';
-import { clothBarcodeLabel, formatCalendarDate, IN_GROUP_TICKET_LABEL, staffClothParts } from '../lib/utils';
-import { buildStaffTicketLines } from '../lib/print-ticket';
+import { clothBarcodeLabel, IN_GROUP_TICKET_LABEL } from '../lib/utils';
+import { buildStaffTicketHeaderLines, buildStaffTicketLines, buildStaffTicketView } from '../lib/print-ticket';
 import { getLogoDataUrl } from '../lib/logo';
 import { useAndroidBackHandler } from '../hooks/useAndroidBackHandler';
-import { groupClothsForStaffTickets, staffTicketTitle, summarizeCustomerOrder } from '../lib/customer-order';
+import { groupClothsForStaffTickets, staffTicketTitle } from '../lib/customer-order';
+import { pairMeasurementRows } from '../lib/measurements';
 import { Button } from './ui';
 import { BrandLogo } from './BrandLogo';
 
@@ -45,7 +46,6 @@ export function BarcodePrintSheet({
   const currentGroup = groups[Math.min(itemIndex, Math.max(groups.length - 1, 0))] ?? [];
   const current = currentGroup[0] ?? null;
   const ticketPieces = currentGroup;
-  const summary = useMemo(() => summarizeCustomerOrder(ticketPieces), [ticketPieces]);
   const [barcodeUrl, setBarcodeUrl] = useState<string | null>(null);
   const [screenBarcodeUrl, setScreenBarcodeUrl] = useState<string | null>(null);
   const [logoDataUrl, setLogoDataUrl] = useState('');
@@ -64,8 +64,10 @@ export function BarcodePrintSheet({
   const cutter = current ? getStaffById(staff, current.cutterId) : null;
   const tailor = current ? getStaffById(staff, current.tailorId) : null;
   const barcodeValue = current?.code?.trim() || 'UNKNOWN';
-  const ticketTitle = staffTicketTitle(ticketPieces);
-  const ticketSize = current ? staffClothParts(current).size : '';
+  const ticket = useMemo(
+    () => buildStaffTicketView(ticketPieces, { cutter, tailor }),
+    [ticketPieces, cutter, tailor],
+  );
 
   const cardHtml = useMemo(() => {
     if (!barcodeUrl || ticketPieces.length === 0) return null;
@@ -134,7 +136,9 @@ export function BarcodePrintSheet({
       try {
         const result = await printThermalTicket({
           barcodeValue,
+          headerLines: buildStaffTicketHeaderLines(ticketPieces),
           lines: buildStaffTicketLines(ticketPieces, { cutter, tailor }),
+          barcodePlacement: 'middle',
         });
         if (result.ok) {
           setStatus(result.message);
@@ -164,10 +168,12 @@ export function BarcodePrintSheet({
           setItemIndex(index);
           const result = await printThermalTicket({
             barcodeValue: piece.code,
+            headerLines: buildStaffTicketHeaderLines(group),
             lines: buildStaffTicketLines(group, {
               cutter: getStaffById(staff, piece.cutterId),
               tailor: getStaffById(staff, piece.tailorId),
             }),
+            barcodePlacement: 'middle',
           });
           if (!result.ok) {
             setStatus(`${result.message}. Stopped at ${piece.code}.`);
@@ -255,15 +261,15 @@ export function BarcodePrintSheet({
   }
 
   return createPortal(
-    <div className="fixed inset-0 z-[200] flex flex-col bg-white">
+    <div className="fixed inset-0 z-[200] flex min-h-0 flex-col bg-white">
       <div
-        className="flex items-center justify-between border-b border-slate-200 px-4 pb-3"
+        className="flex shrink-0 items-center justify-between border-b border-slate-200 px-4 pb-3"
         style={{ paddingTop: 'max(12px, var(--app-safe-top, 0px))' }}
       >
         <h2 className="font-bold text-slate-900">
           Staff ticket · {barcodeValue}
           {groups.length > 1 && (
-            <span className="ml-2 text-xs font-medium text-slate-500">
+            <span className="ms-2 text-xs font-medium text-slate-500">
               {itemIndex + 1} of {groups.length}
             </span>
           )}
@@ -279,79 +285,126 @@ export function BarcodePrintSheet({
       </div>
 
       <div
-        className="flex flex-1 flex-col items-center justify-center gap-5 overflow-y-auto px-6 pt-6"
+        className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-4"
         style={{ paddingBottom: 'max(24px, var(--app-safe-bottom, 0px))' }}
       >
-        <div className="w-full max-w-sm rounded-2xl border-2 border-dashed border-indigo-200 bg-indigo-50/50 p-6 text-center">
-          <BrandLogo size={72} className="mx-auto mb-3 h-[72px] w-[72px] rounded-xl" />
-          {error && <p className="mb-2 text-sm text-rose-600">{error}</p>}
-          {status && <p className="mb-2 text-sm text-emerald-600">{status}</p>}
+        <div className="mx-auto w-full max-w-sm rounded-[14px] border-2 border-dashed border-action/25 bg-white p-4 text-start">
+          <BrandLogo size={40} className="mx-auto mb-3 h-10 w-10 rounded-lg" />
+          {error && <p className="mb-2 text-center text-sm text-rose-600">{error}</p>}
+          {status && <p className="mb-2 text-center text-sm text-emerald-600">{status}</p>}
+          <div className="mb-3 flex items-start justify-between gap-3">
+            <p className="text-sm font-bold text-ink">{ticket?.dateLabel || '—'}</p>
+            <p className="font-mono text-sm font-bold tracking-wide text-ink">
+              {ticket?.orderNumber || barcodeValue}
+            </p>
+          </div>
           {!error && !barcodeUrl && barcodeValue && (
-            <p className="animate-pulse text-sm text-slate-500">Generating barcode...</p>
+            <p className="animate-pulse text-center text-sm text-slate-500">Generating barcode...</p>
           )}
           {(screenBarcodeUrl || barcodeUrl) && (
-            <>
-              <img
-                src={screenBarcodeUrl ?? barcodeUrl ?? ''}
-                alt={`Barcode for ${barcodeValue}`}
-                className="mx-auto mb-2 block w-[180px] rounded-xl bg-white p-3 shadow-sm"
-                style={{ imageRendering: 'pixelated' }}
-                draggable={false}
-              />
-              <p className="mb-3 px-2 text-[11px] leading-snug text-slate-500">
-                QuickScan WL2 is a <strong>laser</strong> — it reads the <strong>printed 80mm ticket</strong>,
-                not this screen. Print on the TVS RP 3200 LITE, then hold the scanner 5–15 cm away with
-                the red line across the full bars.
+            <img
+              src={screenBarcodeUrl ?? barcodeUrl ?? ''}
+              alt={`Barcode for ${barcodeValue}`}
+              className="mx-auto mb-2 block w-[180px] bg-white"
+              style={{ imageRendering: 'pixelated' }}
+              draggable={false}
+            />
+          )}
+          <p className="mb-3 text-center font-display text-2xl font-semibold tracking-wider text-ink">
+            {barcodeValue}
+          </p>
+          <p className="mb-3 px-1 text-center text-[11px] leading-snug text-slate-500">
+            QuickScan WL2 is a <strong>laser</strong> — it reads the <strong>printed 80mm ticket</strong>,
+            not this screen. Print on the TVS RP 3200 LITE, then hold the scanner 5–15 cm away with
+            the red line across the full bars.
+          </p>
+          {ticket?.garmentTitle ? (
+            <p className="mb-3 text-sm font-black tracking-wide text-ink">
+              {ticket.garmentTitle}
+            </p>
+          ) : null}
+          {ticket && ticket.measurements.length > 0 ? (
+            <table className="mb-3 w-full table-fixed border-collapse text-left">
+              <tbody>
+                {pairMeasurementRows(ticket.measurements).map(([left, right], index) => (
+                  <tr key={`${left.label}-${index}`}>
+                    <th className="w-[22%] border border-ink px-2 py-1.5 text-[10px] font-bold uppercase tracking-wide text-ink">
+                      {left.label}
+                    </th>
+                    <td className="w-[28%] border border-ink px-2 py-1.5 text-sm font-black text-ink">
+                      {left.value}
+                    </td>
+                    <th className="w-[22%] border border-ink px-2 py-1.5 text-[10px] font-bold uppercase tracking-wide text-ink">
+                      {right?.label ?? ''}
+                    </th>
+                    <td className="w-[28%] border border-ink px-2 py-1.5 text-sm font-black text-ink">
+                      {right?.value ?? ''}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : null}
+          <div className="space-y-1 text-xs font-medium text-ink">
+            {ticket?.customerName ? (
+              <p className="flex justify-between gap-3">
+                <span>Customer</span>
+                <strong>{ticket.customerName}</strong>
               </p>
-            </>
-          )}
-          <p className="text-3xl font-bold tracking-wider text-indigo-700">{barcodeValue}</p>
-          <p className="mt-2 text-lg font-semibold text-slate-900">{summary.customerName}</p>
-          <div className="mt-3 w-full space-y-3 text-left">
-            <div>
-              <p className="text-sm font-semibold text-slate-800">{ticketTitle}</p>
-              {ticketSize ? (
-                <p className="mt-1 text-xs leading-relaxed text-slate-600">{ticketSize}</p>
-              ) : null}
-            </div>
+            ) : null}
+            {ticket && ticket.qty > 1 ? (
+              <p className="flex justify-between gap-3">
+                <span>Qty</span>
+                <strong>{ticket.qty}</strong>
+              </p>
+            ) : null}
+            {ticket?.cutterName ? (
+              <p className="flex justify-between gap-3">
+                <span>Cutter</span>
+                <strong>{ticket.cutterName}</strong>
+              </p>
+            ) : null}
+            {ticket?.tailorName ? (
+              <p className="flex justify-between gap-3">
+                <span>Tailor</span>
+                <strong>{ticket.tailorName}</strong>
+              </p>
+            ) : null}
+            {ticket?.deliveryDate ? (
+              <p className="flex justify-between gap-3">
+                <span>Delivery</span>
+                <strong>{ticket.deliveryDate}</strong>
+              </p>
+            ) : null}
+            {ticket?.cutterBy ? (
+              <p className="flex justify-between gap-3">
+                <span>Cutter by</span>
+                <strong>{ticket.cutterBy}</strong>
+              </p>
+            ) : null}
+            {ticket?.tailorBy ? (
+              <p className="flex justify-between gap-3">
+                <span>Tailor by</span>
+                <strong>{ticket.tailorBy}</strong>
+              </p>
+            ) : null}
           </div>
-          {ticketPieces.length > 1 && (
-            <p className="mt-2 text-xs font-medium text-slate-500">
-              Qty {ticketPieces.length} prints as one ticket.
+          {ticket?.notes ? (
+            <p className="mt-3 border-t border-dashed border-ink/30 pt-3 text-sm font-semibold leading-snug text-ink whitespace-pre-wrap">
+              Note: {ticket.notes}
             </p>
-          )}
-          {cutter && <p className="mt-2 text-xs text-slate-500">Cutter: {cutter.name}</p>}
-          {tailor && <p className="text-xs text-slate-500">Tailor: {tailor.name}</p>}
-          {current.givenDate && (
-            <p className="mt-2 text-xs text-slate-500">Order: {formatCalendarDate(current.givenDate)}</p>
-          )}
-          {current.deliveryDate && (
-            <p className="text-xs text-slate-500">Delivery: {formatCalendarDate(current.deliveryDate)}</p>
-          )}
-          {current.cutterExpectedDate && (
-            <p className="text-xs text-slate-500">
-              Cutter by: {formatCalendarDate(current.cutterExpectedDate)}
-            </p>
-          )}
-          {current.tailorExpectedDate && (
-            <p className="text-xs text-slate-500">
-              Tailor by: {formatCalendarDate(current.tailorExpectedDate)}
-            </p>
-          )}
-          {current.notes?.trim() && (
-            <p className="mt-2 text-xs text-slate-500">Notes: {current.notes.trim()}</p>
-          )}
-          {ticketPieces.some((piece) => piece.inGroup) && (
+          ) : null}
+          {ticket?.inGroup ? (
             <p className="mt-3 flex items-center gap-2 border-t border-slate-200 pt-3 text-sm font-semibold text-slate-900">
               <Check className="h-4 w-4 shrink-0 stroke-[3]" aria-hidden="true" />
               {IN_GROUP_TICKET_LABEL}
             </p>
-          )}
+          ) : null}
         </div>
 
-        <div className="flex w-full max-w-sm flex-col gap-2">
+        <div className="mx-auto mt-4 flex w-full max-w-sm flex-col gap-2">
           {groups.length > 1 && (
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-3">
               <Button
                 variant="secondary"
                 disabled={itemIndex === 0 || busy}
@@ -412,17 +465,13 @@ export function BarcodePrintSheet({
             <Share2 className="h-4 w-4" />
             Share barcode
           </Button>
+          {native && (
+            <p className="text-center text-xs text-slate-400">
+              Save stores the barcode in the app and opens the share menu — choose{' '}
+              <strong>Save to Files</strong> or <strong>Downloads</strong>
+            </p>
+          )}
         </div>
-
-        {native && (
-          <p className="max-w-xs text-center text-xs text-slate-400">
-            Save stores the barcode in the app and opens the share menu — choose{' '}
-            <strong>Save to Files</strong> or <strong>Downloads</strong>
-          </p>
-        )}
-        <p className="text-center text-xs text-slate-400">
-          Barcode: <span className="font-mono font-semibold">{barcodeValue}</span>
-        </p>
       </div>
     </div>,
     document.body,

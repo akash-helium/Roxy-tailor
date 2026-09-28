@@ -410,8 +410,8 @@ export function AdminClothTypesPage() {
 
   return (
     <AdminPageShell
-      title="Cloth Types"
-      subtitle="Manage cloth types and measurement sizes for the mobile register form"
+      title="Cloth types"
+      subtitle="Types, sizes, and staff rates for the register"
     >
       {setupNeeded && (
         <Card className="border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
@@ -435,11 +435,14 @@ export function AdminClothTypesPage() {
         <Card className="border-rose-200 bg-rose-50 text-sm text-rose-700">{actionError}</Card>
       )}
 
-      <Card className="p-4">
-        <form onSubmit={handleAddType} className="space-y-4">
-          <div className="grid gap-3 lg:grid-cols-[1fr_140px] lg:items-end">
+      <details className="ticket overflow-hidden rounded-[14px]">
+        <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-ink">
+          Add cloth type
+        </summary>
+        <form onSubmit={handleAddType} className="space-y-4 border-t border-seam px-4 pb-4 pt-3">
+          <div className="grid gap-3 sm:grid-cols-[1fr_140px] sm:items-end">
             <Input
-              label="New cloth type"
+              label="Name"
               value={typeLabel}
               onChange={(e) => setTypeLabel(e.target.value)}
               placeholder="e.g. Shirt, Sherwani"
@@ -476,53 +479,57 @@ export function AdminClothTypesPage() {
             </div>
           )}
 
-          <div className="space-y-2">
-            <p className="text-sm font-medium text-slate-700">Sizes / measurements (optional)</p>
-            {newSizes.map((size, index) => (
-              <div key={index} className="flex items-start gap-2">
-                <div className="min-w-0 flex-1">
-                  <SizeDraftEditor
-                    draft={size}
-                    disabled={setupNeeded}
-                    showLabels
-                    onChange={(next) => {
-                      const nextSizes = [...newSizes];
-                      nextSizes[index] = next;
-                      setNewSizes(nextSizes);
-                    }}
-                  />
+          <details className="rounded-xl border border-seam bg-paper px-3 py-2">
+            <summary className="cursor-pointer text-sm font-medium text-ink">
+              Sizes / measurements (optional)
+            </summary>
+            <div className="mt-3 space-y-2">
+              {newSizes.map((size, index) => (
+                <div key={index} className="flex items-start gap-2">
+                  <div className="min-w-0 flex-1">
+                    <SizeDraftEditor
+                      draft={size}
+                      disabled={setupNeeded}
+                      showLabels
+                      onChange={(next) => {
+                        const nextSizes = [...newSizes];
+                        nextSizes[index] = next;
+                        setNewSizes(nextSizes);
+                      }}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setNewSizes(newSizes.filter((_, i) => i !== index))}
+                    disabled={setupNeeded || newSizes.length === 1}
+                    className="mt-3 inline-flex h-[46px] items-center justify-center rounded-lg border border-slate-200 px-3 text-slate-500 hover:bg-slate-50 disabled:opacity-40"
+                    aria-label="Remove size row"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setNewSizes(newSizes.filter((_, i) => i !== index))}
-                  disabled={setupNeeded || newSizes.length === 1}
-                  className="mt-3 inline-flex h-[46px] items-center justify-center rounded-lg border border-slate-200 px-3 text-slate-500 hover:bg-slate-50 disabled:opacity-40"
-                  aria-label="Remove size row"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
-              </div>
-            ))}
-            <Button
-              type="button"
-              variant="secondary"
-              disabled={setupNeeded}
-              onClick={() => setNewSizes([...newSizes, emptySizeDraft()])}
-              className="rounded-lg px-3 py-2 text-sm"
-            >
-              <Plus className="h-4 w-4" />
-              Add another size
-            </Button>
-          </div>
+              ))}
+              <Button
+                type="button"
+                variant="secondary"
+                disabled={setupNeeded}
+                onClick={() => setNewSizes([...newSizes, emptySizeDraft()])}
+                className="rounded-lg px-3 py-2 text-sm"
+              >
+                <Plus className="h-4 w-4" />
+                Add another size
+              </Button>
+            </div>
+          </details>
 
           <Button type="submit" disabled={busy || setupNeeded} className="rounded-lg px-4">
             <Plus className="h-4 w-4" />
-            Add Cloth Type
+            Add cloth type
           </Button>
         </form>
-      </Card>
+      </details>
 
-      <div className="grid min-w-0 gap-4 lg:grid-cols-2">
+      <div className="grid min-w-0 gap-4 lg:grid-cols-[minmax(0,240px)_minmax(0,1fr)]">
         <Card className="min-w-0 overflow-hidden p-0">
           <div className="border-b border-slate-100 px-4 py-3 text-sm font-semibold text-slate-900">
             Cloth types ({catalog.length})
@@ -542,7 +549,7 @@ export function AdminClothTypesPage() {
                         setEditDraft(emptySizeDraft());
                       }}
                       className={`w-full px-4 py-3 text-left transition ${
-                        selected?.id === item.id ? 'bg-indigo-50' : 'hover:bg-slate-50'
+                        selected?.id === item.id ? 'bg-tab/10' : 'hover:bg-paper'
                       }`}
                     >
                       <p className="font-medium text-slate-900">{item.label}</p>
@@ -577,49 +584,8 @@ export function AdminClothTypesPage() {
                 </button>
               </div>
 
-              {staffTypes.length > 0 && (
-                <form onSubmit={(event) => void handleSaveRates(event)} className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
-                  <p className="text-sm font-semibold text-slate-800">Staff pay per piece</p>
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    {staffTypes.map((item) => (
-                      <Input
-                        key={item.slug}
-                        label={`${item.label} (₹)`}
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        value={rateDraft[item.slug] ?? ''}
-                        onChange={(e) =>
-                          setRateDraft((current) => ({ ...current, [item.slug]: e.target.value }))
-                        }
-                        placeholder="0"
-                        disabled={setupNeeded || !selected.dbId}
-                      />
-                    ))}
-                  </div>
-                  <Button type="submit" disabled={busy || setupNeeded || !selected.dbId} className="rounded-lg px-4">
-                    Save staff rates
-                  </Button>
-                </form>
-              )}
-
-              <form onSubmit={handleAddSize} className="space-y-3">
-                <SizeDraftEditor
-                  draft={addSizeDraft}
-                  disabled={setupNeeded || !selected.dbId}
-                  showLabels
-                  onChange={setAddSizeDraft}
-                />
-                <Button
-                  type="submit"
-                  disabled={busy || setupNeeded || !selected.dbId}
-                  className="rounded-lg px-4"
-                >
-                  Add Size Field
-                </Button>
-              </form>
-
               <div className="space-y-2">
+                <p className="text-sm font-semibold text-slate-800">Sizes</p>
                 {selected.fields.length === 0 ? (
                   <p className="text-sm text-slate-500">No size fields yet.</p>
                 ) : (
@@ -628,7 +594,7 @@ export function AdminClothTypesPage() {
                       <form
                         key={field.id}
                         onSubmit={handleSaveSize}
-                        className="space-y-3 rounded-lg border border-indigo-200 bg-indigo-50/40 p-3"
+                        className="space-y-3 rounded-[10px] border border-action/20 bg-action/5 p-3"
                       >
                         <SizeDraftEditor
                           draft={editDraft}
@@ -677,7 +643,7 @@ export function AdminClothTypesPage() {
                             type="button"
                             onClick={() => startEditSize(field)}
                             disabled={busy || setupNeeded || !selected.dbId}
-                            className="rounded-lg p-2 text-slate-400 hover:bg-white hover:text-indigo-600 disabled:opacity-50"
+                            className="rounded-[8px] p-2 text-ink-muted hover:bg-ticket hover:text-action disabled:opacity-50"
                             aria-label={`Edit ${field.label}`}
                           >
                             <Pencil className="h-4 w-4" />
@@ -697,6 +663,55 @@ export function AdminClothTypesPage() {
                   )
                 )}
               </div>
+
+              <form onSubmit={handleAddSize}>
+                <details className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                  <summary className="cursor-pointer text-sm font-semibold text-slate-800">
+                    Add size field
+                  </summary>
+                  <div className="mt-3 space-y-3">
+                    <SizeDraftEditor
+                      draft={addSizeDraft}
+                      disabled={setupNeeded || !selected.dbId}
+                      showLabels
+                      onChange={setAddSizeDraft}
+                    />
+                    <Button
+                      type="submit"
+                      disabled={busy || setupNeeded || !selected.dbId}
+                      className="rounded-lg px-4"
+                    >
+                      Add size field
+                    </Button>
+                  </div>
+                </details>
+              </form>
+
+              {staffTypes.length > 0 && (
+                <form onSubmit={(event) => void handleSaveRates(event)} className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                  <p className="text-sm font-semibold text-slate-800">Staff pay per piece</p>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    {staffTypes.map((item) => (
+                      <Input
+                        key={item.slug}
+                        label={`${item.label} (₹)`}
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={rateDraft[item.slug] ?? ''}
+                        onChange={(e) =>
+                          setRateDraft((current) => ({ ...current, [item.slug]: e.target.value }))
+                        }
+                        placeholder="0"
+                        disabled={setupNeeded || !selected.dbId}
+                      />
+                    ))}
+                  </div>
+                  <Button type="submit" disabled={busy || setupNeeded || !selected.dbId} className="rounded-lg px-4">
+                    Save staff rates
+                  </Button>
+                </form>
+              )}
             </div>
           ) : (
             <p className="py-8 text-center text-sm text-slate-500">Select a cloth type to manage sizes.</p>

@@ -39,6 +39,8 @@ export function looksLikeScanPayload(value: string) {
   const normalized = normalizeScannerBarcode(value);
   if (normalized.length < 3) return false;
   if (/^CL-?[A-Z0-9-]{2,}$/i.test(normalized)) return true;
+  if (/^CU-?[A-Z0-9-]{2,}$/i.test(normalized)) return true;
+  if (/^OR-?\d{1,6}$/i.test(normalized)) return true;
   if (/^[A-Z]{1,4}\d{4,}$/i.test(normalized)) return true;
   if (/^[A-Z0-9-]{6,32}$/i.test(normalized)) return true;
   return false;

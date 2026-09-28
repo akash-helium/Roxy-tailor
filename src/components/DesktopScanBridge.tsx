@@ -11,6 +11,8 @@ export function DesktopScanBridge() {
   useEffect(() => {
     if (!enabled) return;
     return subscribe((code) => {
+      const active = document.activeElement;
+      if (active instanceof HTMLElement && active.dataset.allowTyping !== undefined) return;
       if (location.pathname === '/') return;
       navigate('/', { state: { scanCode: code, t: Date.now() } });
     });

@@ -21,9 +21,9 @@ export function RegisterPrintPrompt({
   const customerPhone = cloths[0]?.customerPhone?.trim() ?? '';
 
   return (
-    <div className="fixed inset-0 z-[180] flex items-end justify-center bg-black/40 p-4 sm:items-center">
+    <div className="fixed inset-0 z-[180] flex items-end justify-center bg-ink/40 p-4 sm:items-center sm:p-6">
       <div
-        className="w-full max-w-sm rounded-3xl bg-white p-6 shadow-2xl"
+        className="ticket w-full max-w-lg rounded-[18px] p-6"
         role="dialog"
         aria-labelledby="register-print-title"
       >
@@ -34,10 +34,11 @@ export function RegisterPrintPrompt({
               Order saved successfully
             </h2>
             <p className="mt-1 text-sm text-slate-500">
+              {summary.orderCode ? `${summary.orderCode} · ` : ''}
               {summary.customerName} · {summary.pieceCount} piece{summary.pieceCount === 1 ? '' : 's'}
             </p>
-            <p className="mt-0.5 font-mono text-xs text-indigo-600">
-              {summary.codes.join(' · ') || '—'}
+            <p className="mt-0.5 font-mono text-xs text-ink">
+              Cloths: {summary.codes.join(' · ') || '—'}
             </p>
             {customerPhone ? (
               <p className="mt-1 text-xs text-slate-500">WhatsApp: {customerPhone}</p>

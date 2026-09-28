@@ -60,7 +60,7 @@ export function AdminCustomersPage() {
     <div className="space-y-4">
       <PageIntro
         title="Customers"
-        subtitle="Select a customer to view all saved orders and payment details"
+        subtitle="Orders and balances by person"
       />
 
       {error && (
@@ -131,8 +131,8 @@ export function AdminCustomersPage() {
                     <SummaryCard label="Orders" value={String(selected.orderCount)} />
                   </SummaryGrid>
 
-                  <div className="space-y-4">
-                    <h4 className="text-sm font-semibold text-slate-900">All Orders</h4>
+                  <div className="space-y-2">
+                    <h4 className="text-sm font-semibold text-ink">Orders</h4>
                     {selected.cloths.map((cloth) => (
                       <ClothOrderCard key={cloth.id} cloth={cloth} staff={staff} />
                     ))}

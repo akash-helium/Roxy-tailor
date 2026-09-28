@@ -47,6 +47,7 @@ function clothRow(cloth: Cloth, userId: string) {
       finalPaymentDate: cloth.finalPaymentDate,
       deliveryDate: cloth.deliveryDate,
       orderBatchId: cloth.orderBatchId,
+      orderCode: cloth.orderCode,
       staffJobs: cloth.staffJobs,
       customerPhone: cloth.customerPhone,
     }),
@@ -70,6 +71,7 @@ function clothRow(cloth: Cloth, userId: string) {
     given_date: cloth.givenDate,
     cutter_expected_date: cloth.cutterExpectedDate,
     tailor_expected_date: cloth.tailorExpectedDate,
+    order_code: cloth.orderCode ?? '',
     created_at: cloth.createdAt,
     updated_at: cloth.updatedAt,
   };

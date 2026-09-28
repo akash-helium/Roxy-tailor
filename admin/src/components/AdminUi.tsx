@@ -1,7 +1,13 @@
 import { Search } from 'lucide-react';
 import type { Cloth, Staff } from '@app/types';
-import { clothDescription, formatCalendarDate } from '@app/lib/utils';
-import { clothPendingAmount, formatCurrency, getStaffPayFields, staffPayPending } from '@app/lib/payments';
+import { clothBillName, formatCalendarDate } from '@app/lib/utils';
+import {
+  clothPaidAmount,
+  clothPendingAmount,
+  formatCurrency,
+  getStaffPayFields,
+  staffPayPending,
+} from '@app/lib/payments';
 import {
   CLOTH_STATUS_COLORS,
   CLOTH_STATUS_LABELS,
@@ -25,8 +31,8 @@ export function PageIntro({
   return (
     <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
       <div className="min-w-0">
-        <h2 className="text-lg font-bold text-slate-900 sm:text-xl">{title}</h2>
-        {subtitle && <p className="mt-0.5 text-sm text-slate-500">{subtitle}</p>}
+        <h2 className="font-display text-xl font-semibold text-ink sm:text-2xl">{title}</h2>
+        {subtitle && <p className="mt-0.5 text-sm text-ink-muted">{subtitle}</p>}
       </div>
       {action && <div className="w-full shrink-0 sm:w-auto">{action}</div>}
     </div>
@@ -71,7 +77,7 @@ export function SearchInput({
         value={value}
         onChange={(event) => onChange(event.target.value)}
         placeholder={placeholder}
-        className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-3 text-sm outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+        className="w-full rounded-[10px] border border-seam bg-ticket py-2 pl-9 pr-3 text-sm outline-none transition focus:border-brass focus:ring-2 focus:ring-brass/25"
       />
     </div>
   );
@@ -95,7 +101,7 @@ export function MasterDetail({
   return (
     <div
       className={cn(
-        'grid min-h-0 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm',
+        'ticket grid min-h-0 overflow-hidden rounded-[14px]',
         'max-lg:grid-cols-1 lg:h-[min(720px,calc(100dvh-11rem))] lg:grid-cols-[minmax(0,280px)_minmax(0,1fr)]',
         className,
       )}
@@ -119,7 +125,7 @@ export function MasterDetail({
             <button
               type="button"
               onClick={onDetailBack}
-              className="inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-sm font-semibold text-indigo-600 hover:bg-indigo-50"
+              className="inline-flex min-h-11 items-center gap-1 rounded-[10px] px-2 py-1.5 text-sm font-semibold text-action hover:bg-linen"
             >
               ← Back to list
             </button>
@@ -164,13 +170,13 @@ export function SelectableListItem({
       className={cn(
         'w-full rounded-lg px-3 py-3 text-left transition',
         active
-          ? 'bg-indigo-50 ring-1 ring-indigo-200'
-          : 'hover:bg-slate-50',
+          ? 'bg-tab/10 ring-1 ring-tab/25'
+          : 'hover:bg-paper',
       )}
     >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0 flex-1">
-          <p className={cn('truncate font-semibold', active ? 'text-indigo-900' : 'text-slate-900')}>
+          <p className={cn('truncate font-semibold', active ? 'text-tab' : 'text-ink')}>
             {title}
           </p>
           {subtitle && <p className="mt-0.5 truncate text-xs text-slate-500">{subtitle}</p>}
@@ -250,12 +256,18 @@ export function DetailGrid({
 }: {
   items: Array<{ label: string; value: React.ReactNode }>;
 }) {
+  const visible = items.filter((item) => {
+    if (item.value == null || item.value === false) return false;
+    if (typeof item.value === 'string' && (!item.value.trim() || item.value === '—')) return false;
+    return true;
+  });
+  if (visible.length === 0) return null;
   return (
-    <dl className="grid gap-3 sm:grid-cols-2">
-      {items.map((item) => (
-        <div key={item.label} className="rounded-lg bg-slate-50 px-3 py-2.5">
-          <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">{item.label}</dt>
-          <dd className="mt-1 text-sm font-medium text-slate-900">{item.value}</dd>
+    <dl className="grid gap-2 sm:grid-cols-2">
+      {visible.map((item) => (
+        <div key={item.label} className="rounded-lg bg-paper px-3 py-2">
+          <dt className="text-[11px] font-medium uppercase tracking-wide text-ink-muted">{item.label}</dt>
+          <dd className="mt-0.5 text-sm font-medium text-ink">{item.value}</dd>
         </div>
       ))}
     </dl>
@@ -311,69 +323,98 @@ export function ClothOrderCard({
 }) {
   const cutter = staff.find((member) => member.id === cloth.cutterId);
   const tailor = staff.find((member) => member.id === cloth.tailorId);
+  const paid = clothPaidAmount(cloth);
   const pending = clothPendingAmount(cloth);
   const staffPay = staffType ? getStaffPayFields(cloth, staffType) : null;
   const staffPending = staffPay
     ? staffPayPending(staffPay.amount, staffPay.advance, staffPay.final)
     : 0;
+  const staffPaid = staffPay ? staffPay.advance + staffPay.final : 0;
 
   return (
-    <article className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 bg-slate-50/60 px-4 py-3">
-        <div>
+    <article className="rounded-xl border border-seam bg-white px-3 py-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="font-mono text-sm font-bold text-indigo-700">{cloth.code}</span>
+            <span className="font-display text-sm font-semibold tracking-wide text-ink">
+              {cloth.orderCode ? `${cloth.orderCode} · ${cloth.code}` : cloth.code}
+            </span>
             <ClothStatusBadge status={cloth.status} />
           </div>
-          <p className="mt-1 text-sm font-medium text-slate-900">{clothDescription(cloth)}</p>
+          <p className="mt-0.5 truncate text-sm font-medium text-ink">{clothBillName(cloth)}</p>
           {showCustomer && (
-            <p className="mt-0.5 text-xs text-slate-500">Customer: {cloth.customerName}</p>
+            <p className="mt-0.5 text-xs text-ink-muted">{cloth.customerName}</p>
           )}
         </div>
-        <div className="text-right text-xs text-slate-500">
-          <p>Updated {formatDateTime(cloth.updatedAt)}</p>
-          <p>Created {formatDate(cloth.createdAt)}</p>
+        <p className="shrink-0 text-right text-[11px] text-ink-muted">
+          {formatDate(cloth.updatedAt)}
+        </p>
+      </div>
+
+      <div className="mt-2 grid grid-cols-3 gap-2 text-sm">
+        <div>
+          <p className="text-[11px] text-ink-muted">Bill</p>
+          <p className="font-semibold tabular-nums text-ink">{formatCurrency(cloth.totalAmount)}</p>
+        </div>
+        <div>
+          <p className="text-[11px] text-ink-muted">Paid</p>
+          <p className="font-semibold tabular-nums text-done">{formatCurrency(paid)}</p>
+        </div>
+        <div>
+          <p className="text-[11px] text-ink-muted">Pending</p>
+          <p className={cn('font-semibold tabular-nums', pending > 0 ? 'text-cut' : 'text-ink-muted')}>
+            {formatCurrency(pending)}
+          </p>
         </div>
       </div>
 
-      <div className="grid gap-4 p-4 lg:grid-cols-2">
-        <section>
-          <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-            Order Details
-          </h4>
+      {staffPay && (
+        <div className="mt-2 grid grid-cols-3 gap-2 border-t border-seam pt-2 text-sm">
+          <div>
+            <p className="text-[11px] text-ink-muted">{STAFF_TYPE_LABELS[staffType!]} pay</p>
+            <p className="font-semibold tabular-nums">{formatCurrency(staffPay.amount)}</p>
+          </div>
+          <div>
+            <p className="text-[11px] text-ink-muted">Paid</p>
+            <p className="font-semibold tabular-nums text-done">{formatCurrency(staffPaid)}</p>
+          </div>
+          <div>
+            <p className="text-[11px] text-ink-muted">Pending</p>
+            <p className={cn('font-semibold tabular-nums', staffPending > 0 ? 'text-cut' : 'text-ink-muted')}>
+              {formatCurrency(staffPending)}
+            </p>
+          </div>
+        </div>
+      )}
+
+      <details className="mt-2">
+        <summary className="cursor-pointer text-xs font-semibold text-action">More</summary>
+        <div className="mt-2 space-y-3">
           <DetailGrid
             items={[
-              { label: 'Garment', value: cloth.garment || '—' },
-              { label: 'Fabric / Color', value: cloth.fabricColor || '—' },
-              { label: 'Measurements', value: cloth.size?.trim() || '—' },
+              { label: 'Fabric / Color', value: cloth.fabricColor },
+              { label: 'Measurements', value: cloth.size?.trim() },
               { label: 'Order date', value: formatCalendarDate(cloth.givenDate) },
               { label: 'Delivery date', value: formatCalendarDate(cloth.deliveryDate) },
-              { label: 'Cutter Due', value: formatCalendarDate(cloth.cutterExpectedDate) },
-              { label: 'Tailor Due', value: formatCalendarDate(cloth.tailorExpectedDate) },
-              { label: 'Cutter', value: cutter?.name ?? '—' },
-              { label: 'Tailor', value: tailor?.name ?? '—' },
-              { label: 'Notes', value: cloth.notes?.trim() || '—' },
+              { label: 'Cutter due', value: formatCalendarDate(cloth.cutterExpectedDate) },
+              { label: 'Tailor due', value: formatCalendarDate(cloth.tailorExpectedDate) },
+              { label: 'Cutter', value: cutter?.name },
+              { label: 'Tailor', value: tailor?.name },
+              { label: 'Notes', value: cloth.notes?.trim() },
+              { label: 'Created', value: formatDateTime(cloth.createdAt) },
             ]}
           />
-        </section>
-
-        <section className="space-y-4">
-          <div>
-            <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-              Customer Payment
-            </h4>
-            <div className="space-y-2 rounded-lg border border-slate-100 bg-slate-50 p-3">
-              <PaymentRow label="Total Bill" amount={cloth.totalAmount} />
+          {(cloth.discountAmount ?? 0) > 0 ||
+          cloth.advanceAmount > 0 ||
+          (cloth.partPayments ?? []).length > 0 ||
+          cloth.finalPaymentAmount > 0 ? (
+            <div className="space-y-1.5 rounded-lg bg-paper px-3 py-2">
               {(cloth.discountAmount ?? 0) > 0 && (
                 <PaymentRow label="Discount" amount={cloth.discountAmount} tone="warning" />
               )}
-              {(cloth.discountAmount ?? 0) > 0 && (
-                <PaymentRow
-                  label="Net Bill"
-                  amount={cloth.totalAmount - cloth.discountAmount}
-                />
+              {cloth.advanceAmount > 0 && (
+                <PaymentRow label="Advance" amount={cloth.advanceAmount} tone="success" />
               )}
-              <PaymentRow label="Advance Paid" amount={cloth.advanceAmount} tone="success" />
               {(cloth.partPayments ?? []).map((item, index) => (
                 <PaymentRow
                   key={`part-${index}`}
@@ -382,35 +423,13 @@ export function ClothOrderCard({
                   tone="success"
                 />
               ))}
-              <PaymentRow label="Final Paid" amount={cloth.finalPaymentAmount} tone="success" />
-              <PaymentRow label="Pending" amount={pending} tone={pending > 0 ? 'warning' : 'default'} />
+              {cloth.finalPaymentAmount > 0 && (
+                <PaymentRow label="Final" amount={cloth.finalPaymentAmount} tone="success" />
+              )}
             </div>
-          </div>
-
-          {staffPay && (
-            <div>
-              <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                Staff Payment ({STAFF_TYPE_LABELS[staffType!]})
-              </h4>
-              <div className="space-y-2 rounded-lg border border-slate-100 bg-slate-50 p-3">
-                <PaymentRow label="Total Pay" amount={staffPay.amount} />
-                <PaymentRow label="Advance Paid" amount={staffPay.advance} tone="success" />
-                <PaymentRow label="Final Paid" amount={staffPay.final} tone="success" />
-                <PaymentRow
-                  label="Pending"
-                  amount={staffPending}
-                  tone={staffPending > 0 ? 'warning' : 'default'}
-                />
-                {staffPay.remarks?.trim() && (
-                  <p className="border-t border-slate-200 pt-2 text-xs text-slate-500">
-                    Remarks: {staffPay.remarks}
-                  </p>
-                )}
-              </div>
-            </div>
-          )}
-        </section>
-      </div>
+          ) : null}
+        </div>
+      </details>
     </article>
   );
 }

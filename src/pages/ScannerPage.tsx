@@ -1,80 +1,240 @@
-import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
-import { Camera, CheckCircle2, Hash, ScanLine, UserPlus } from 'lucide-react';
+import { Camera, ChevronLeft, ChevronRight, Hash, ScanLine } from 'lucide-react';
 import { ensureCameraAccess } from '../lib/camera-permissions';
 import {
-  assignCutter,
-  assignStaffJob,
-  assignTailor,
   getClothByCode,
-  getStaffById,
   getStaffByType,
-  markCuttingComplete,
-  markSewingComplete,
+  listClothsByOrderCode,
 } from '../lib/data';
 import { useAndroidBackHandler } from '../hooks/useAndroidBackHandler';
 import { useAppData } from '../hooks/useAppData';
 import { useHardwareScannerBusOptional, refocusScannerCapture } from '../contexts/HardwareScannerContext';
-import { useStaffTypes } from '../contexts/StaffTypesContext';
 import { isDesktopApp, supportsCameraScanner, supportsHardwareScanner } from '../lib/platform';
 import { isScanTerminatorKey, normalizeScannerBarcode } from '../lib/scanner-input';
-import { PaymentDashboard, PaymentSummary } from '../components/PaymentDashboard';
+import { PaymentDashboard } from '../components/PaymentDashboard';
+import { ScanBasketPanel } from '../components/ScanBasketPanel';
+import { type Cloth } from '../types';
+import { orderStageBadge } from '../lib/cloth-status';
+import { Badge, Button, Card, Input, Modal, PageHeader, showToast } from '../components/ui';
+import { formatCalendarDate, isPastDue, todayDateString, clothBillName } from '../lib/utils';
 import {
-  CLOTH_STATUS_COLORS,
-  CLOTH_STATUS_LABELS,
-  type Cloth,
-} from '../types';
-import { Badge, Button, Card, Input, Modal, PageHeader, Select } from '../components/ui';
-import { formatCalendarDate, isPastDue, todayDateString, clothDescription, clothBillName } from '../lib/utils';
-import { getCustomerOrderCloths } from '../lib/customer-order';
+  getCustomerOrderCloths,
+  getOrderRepresentatives,
+  summarizeCustomerOrder,
+  groupClothsForCustomerBill,
+  customerBillItemLabel,
+} from '../lib/customer-order';
+import { formatCurrency } from '../lib/payments';
+import { ClothManageSheet } from '../components/ClothManageSheet';
+import {
+  applyScanToSession,
+  classifyScanCloth,
+  expandScannedCloths,
+  looksLikeOrderCode,
+  otherStageMessage,
+  scanAddToast,
+  sessionModalTitle,
+  customerBillLookupCode,
+  type ScanBasketKind,
+} from '../lib/scan-basket';
+import {
+  clothDoneOnDay,
+  clothMatchesShopDate,
+  filterShopCloths,
+  shopStaffLoads,
+  shopWorkCounts,
+  todayBoardCloths,
+  type ShopStageFilter,
+} from '../lib/shop-work';
 
-type ScanStep = 'idle' | 'scanning' | 'result';
+type ScanStep = 'idle' | 'scanning' | 'result' | 'customer';
 
-function extraStaffIdsFromCloth(cloth: Cloth, extraTypes: { slug: string }[]) {
-  return Object.fromEntries(
-    extraTypes.map((role) => [
-      role.slug,
-      cloth.staffJobs.find((job) => job.type === role.slug)?.staffId ?? '',
-    ]),
+const HOME_STAGE_FILTERS: { id: ShopStageFilter; label: string }[] = [
+  { id: 'all', label: 'Due & done' },
+  { id: 'cutting', label: 'Cutting' },
+  { id: 'unassigned', label: 'Unassigned' },
+  { id: 'tailoring', label: 'Tailoring' },
+  { id: 'done', label: 'Done' },
+];
+
+const HOME_PAGE_SIZE = 8;
+
+function orderAccentClass(orderCloths: Cloth[]) {
+  const finished = orderCloths.every((item) => item.status === 'completed');
+  if (finished) return 'bg-done';
+  if (orderCloths.some((item) => isPastDue(item.deliveryDate, item.status === 'completed'))) return 'bg-overdue';
+  if (orderCloths.some((item) => item.status === 'sewing' || item.status === 'ready_to_sew')) return 'bg-sew';
+  return 'bg-cut';
+}
+
+function HomeOrderRows({
+  pieces,
+  allCloths,
+  empty,
+  onOpen,
+}: {
+  pieces: Cloth[];
+  allCloths: Cloth[];
+  empty: string;
+  onOpen: (code: string) => void;
+}) {
+  const [page, setPage] = useState(0);
+  const sorted = [...pieces].sort(
+    (a, b) =>
+      (a.deliveryDate || a.givenDate || '').localeCompare(b.deliveryDate || b.givenDate || '') ||
+      a.customerName.localeCompare(b.customerName),
+  );
+  const rows = getOrderRepresentatives(sorted, allCloths);
+  const pageCount = Math.max(1, Math.ceil(rows.length / HOME_PAGE_SIZE));
+  const safePage = Math.min(page, pageCount - 1);
+  const visible = rows.slice(safePage * HOME_PAGE_SIZE, safePage * HOME_PAGE_SIZE + HOME_PAGE_SIZE);
+
+  if (rows.length === 0) {
+    return <p className="px-1 py-6 text-center text-sm text-ink-muted">{empty}</p>;
+  }
+
+  return (
+    <div>
+      <ul className="flex flex-col gap-1">
+        {visible.map((rep) => {
+          const orderCloths = getCustomerOrderCloths(rep, allCloths);
+          const summary = summarizeCustomerOrder(orderCloths);
+          const stage = orderStageBadge(orderCloths);
+          const overdue = isPastDue(summary.deliveryDate, orderCloths.every((item) => item.status === 'completed'));
+          return (
+            <li key={rep.id}>
+              <button
+                type="button"
+                onClick={() => onOpen(rep.code)}
+                className="flex w-full items-center gap-3 rounded-[12px] px-2 py-2.5 text-left transition hover:bg-linen"
+              >
+                <span className={`h-9 w-1 shrink-0 rounded-full ${orderAccentClass(orderCloths)}`} />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="truncate text-sm font-semibold text-ink">{summary.customerName}</p>
+                    <Badge className={`shrink-0 ${stage.className}`}>{stage.label}</Badge>
+                  </div>
+                  <p className="mt-0.5 truncate font-mono text-[11px] text-ink-muted">
+                    {summary.orderCode || rep.code}
+                    {summary.pieceCount > 1 ? ` · ${summary.pieceCount} pcs` : ` · ${rep.code}`}
+                    {summary.deliveryDate
+                      ? ` · ${overdue ? 'Overdue' : 'Due'} ${formatCalendarDate(summary.deliveryDate)}`
+                      : summary.givenDate
+                        ? ` · ${formatCalendarDate(summary.givenDate)}`
+                        : ''}
+                  </p>
+                </div>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+      {pageCount > 1 ? (
+        <div className="mt-3 flex items-center justify-between gap-3 border-t border-seam pt-3">
+          <p className="text-xs text-ink-muted">
+            {safePage * HOME_PAGE_SIZE + 1}–{Math.min(rows.length, (safePage + 1) * HOME_PAGE_SIZE)} of {rows.length}
+          </p>
+          <div className="flex items-center gap-1">
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              disabled={safePage === 0}
+              onClick={() => setPage((value) => Math.max(0, value - 1))}
+            >
+              <ChevronLeft className="h-3.5 w-3.5" />
+              Prev
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              disabled={safePage >= pageCount - 1}
+              onClick={() => setPage((value) => Math.min(pageCount - 1, value + 1))}
+            >
+              Next
+              <ChevronRight className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
 export function ScannerPage() {
   const { cloths, staff, loading, error, refetch } = useAppData();
-  const { types: staffRoleTypes } = useStaffTypes();
-  const extraStaffTypes = staffRoleTypes.filter((item) => item.slug !== 'cutter' && item.slug !== 'tailor');
   const location = useLocation();
   const navigate = useNavigate();
   const scannerRef = useRef<Html5Qrcode | null>(null);
   const [step, setStep] = useState<ScanStep>('idle');
-  const [scannedCloth, setScannedCloth] = useState<Cloth | null>(null);
   const [activePieceId, setActivePieceId] = useState<string | null>(null);
-  const [selectedCutterId, setSelectedCutterId] = useState('');
-  const [selectedTailorId, setSelectedTailorId] = useState('');
-  const [extraStaffIds, setExtraStaffIds] = useState<Record<string, string>>({});
-  const [cutterExpectedDate, setCutterExpectedDate] = useState('');
-  const [tailorExpectedDate, setTailorExpectedDate] = useState('');
   const [scanError, setScanError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [manualCode, setManualCode] = useState('');
+  const [homeStage, setHomeStage] = useState<ShopStageFilter>('all');
+  const [homeDate, setHomeDate] = useState(todayDateString);
   const manualInputRef = useRef<HTMLInputElement>(null);
 
   const hardwareScanner = supportsHardwareScanner();
   const cameraScanner = supportsCameraScanner() && !isDesktopApp();
   const scannerBus = useHardwareScannerBusOptional();
   const scannerConnected = Boolean(hardwareScanner && scannerBus?.enabled);
+  const [basketIds, setBasketIds] = useState<string[]>([]);
+  const [customerOrderIds, setCustomerOrderIds] = useState<string[]>([]);
+  const [manageFromScan, setManageFromScan] = useState<Cloth | null>(null);
+  const basketIdsRef = useRef<string[]>([]);
+  const sessionKindRef = useRef<ScanBasketKind | null>(null);
+  const handleScanRef = useRef<(code: string) => Promise<void>>(async () => {});
 
   const tailors = getStaffByType(staff, 'tailor');
   const cutters = getStaffByType(staff, 'cutter');
-  const counts = {
-    cutting: cloths.filter((c) => c.status === 'cutting').length,
-    ready: cloths.filter((c) => c.status === 'ready_to_sew').length,
-    sewing: cloths.filter((c) => c.status === 'sewing').length,
-  };
+  const counts = useMemo(() => shopWorkCounts(cloths), [cloths]);
+  const staffLoads = useMemo(() => shopStaffLoads(cloths, staff), [cloths, staff]);
+  const todayBoard = useMemo(
+    () => todayBoardCloths(cloths, homeDate || todayDateString()),
+    [cloths, homeDate],
+  );
+  const filteredHomeCloths = useMemo(() => {
+    if (homeStage === 'all') {
+      return homeDate ? todayBoard.pieces : cloths;
+    }
+    if (homeStage === 'done' && homeDate) {
+      return cloths.filter(
+        (cloth) =>
+          cloth.status === 'completed' &&
+          (clothDoneOnDay(cloth, homeDate) || clothMatchesShopDate(cloth, homeDate)),
+      );
+    }
+    return [...filterShopCloths(cloths, homeStage, homeDate)].sort(
+      (a, b) =>
+        (b.deliveryDate || b.givenDate || b.createdAt).localeCompare(a.deliveryDate || a.givenDate || a.createdAt),
+    );
+  }, [cloths, homeStage, homeDate, todayBoard.pieces]);
 
   const scanLockRef = useRef(false);
+  const basket = useMemo(() => {
+    const byId = new Map(cloths.map((item) => [item.id, item]));
+    return basketIds
+      .map((id) => byId.get(id))
+      .filter((item): item is Cloth => Boolean(item));
+  }, [basketIds, cloths]);
+  const customerOrder = useMemo(() => {
+    const byId = new Map(cloths.map((item) => [item.id, item]));
+    return customerOrderIds
+      .map((id) => byId.get(id))
+      .filter((item): item is Cloth => Boolean(item));
+  }, [customerOrderIds, cloths]);
+  const customerBill = useMemo(() => summarizeCustomerOrder(customerOrder), [customerOrder]);
+  const manageClothLive =
+    manageFromScan && (cloths.find((item) => item.id === manageFromScan.id) ?? manageFromScan);
+
+  useEffect(() => {
+    basketIdsRef.current = basketIds;
+  }, [basketIds]);
 
   useEffect(() => {
     return () => {
@@ -107,7 +267,7 @@ export function ScannerPage() {
         (decodedText) => {
           if (scanLockRef.current) return;
           scanLockRef.current = true;
-          void handleScan(decodedText).finally(() => {
+          void handleScanRef.current(decodedText).finally(() => {
             scanLockRef.current = false;
           });
         },
@@ -133,13 +293,11 @@ export function ScannerPage() {
         scannerRef.current = null;
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- start only when entering scan mode
   }, [step]);
 
   async function startScanner() {
     setScanError(null);
     setActionError(null);
-    setScannedCloth(null);
     scanLockRef.current = false;
 
     const access = await ensureCameraAccess();
@@ -164,7 +322,6 @@ export function ScannerPage() {
   }
 
   async function handleScan(code: string) {
-    await stopScanner();
     setBusy(true);
     setActionError(null);
     setScanError(null);
@@ -173,33 +330,102 @@ export function ScannerPage() {
     const normalized = normalizeScannerBarcode(code);
 
     try {
-      const cloth = await getClothByCode(normalized);
-
-      if (!cloth) {
-        setScanError(`No cloth found for code "${normalized}"`);
-        setStep('idle');
+      const customerKey =
+        customerBillLookupCode(normalized) ??
+        (looksLikeOrderCode(normalized) ? normalized : null);
+      if (customerKey) {
+        let incoming = await listClothsByOrderCode(customerKey);
+        if (incoming.length === 0) {
+          const cloth = await getClothByCode(customerKey);
+          if (cloth) incoming = getCustomerOrderCloths(cloth, cloths);
+        }
+        if (incoming.length === 0) {
+          const message = `No customer bill found for "${normalized}"`;
+          showToast(message);
+          setScanError(message);
+          refocusScannerCapture();
+          return;
+        }
+        sessionKindRef.current = null;
+        setBasketIds([]);
+        setActivePieceId(null);
+        setCustomerOrderIds(incoming.map((item) => item.id));
+        setStep('customer');
+        showToast(`Customer bill · ${incoming[0]?.orderCode || customerKey}`);
+        refocusScannerCapture();
         return;
       }
 
-      setScannedCloth(cloth);
-      setActivePieceId(cloth.id);
-      setSelectedCutterId(cloth.cutterId ?? '');
-      setSelectedTailorId(cloth.tailorId ?? '');
-      setExtraStaffIds(extraStaffIdsFromCloth(cloth, extraStaffTypes));
-      setCutterExpectedDate(cloth.cutterExpectedDate ?? '');
-      setTailorExpectedDate(cloth.tailorExpectedDate ?? '');
+      let incoming: Cloth[] = [];
+      const cloth = await getClothByCode(normalized);
+      if (!cloth) {
+        const message = `No cloth found for code "${normalized}"`;
+        showToast(message);
+        setScanError(message);
+        refocusScannerCapture();
+        return;
+      }
+      incoming = expandScannedCloths(cloth, cloths, normalized);
+
+      const byId = new Map(cloths.map((item) => [item.id, item]));
+      const current = basketIdsRef.current
+        .map((id) => byId.get(id))
+        .filter((item): item is Cloth => Boolean(item));
+      const result = applyScanToSession(current, incoming, sessionKindRef.current);
+
+      if (result.mismatched.length > 0 && result.added.length === 0 && result.duplicates.length === 0) {
+        const other = classifyScanCloth(result.mismatched[0]!);
+        const session = result.sessionKind ?? sessionKindRef.current;
+        showToast(session ? otherStageMessage(session, other) : 'Finish this list first.');
+        refocusScannerCapture();
+        return;
+      }
+
+      if (result.added.length === 0 && result.skippedDone.length > 0 && result.duplicates.length === 0) {
+        const first = result.skippedDone[0]!;
+        showToast(`Already done · ${clothBillName(first)} · ${first.code}`);
+        refocusScannerCapture();
+        return;
+      }
+
+      if (result.added.length === 0 && result.duplicates.length > 0) {
+        showToast('Already in list');
+        if (result.next.length > 0) setStep('result');
+        refocusScannerCapture();
+        return;
+      }
+
+      if (result.added.length === 0) {
+        refocusScannerCapture();
+        return;
+      }
+
+      sessionKindRef.current = result.sessionKind;
+      setBasketIds(result.next.map((item) => item.id));
+      const focus = result.added[result.added.length - 1] ?? result.next[0];
+      if (focus) {
+        setActivePieceId(focus.id);
+      }
+      setScanError(null);
       setStep('result');
+      showToast(scanAddToast(result.added));
+      if (result.mismatched.length > 0) {
+        const other = classifyScanCloth(result.mismatched[0]!);
+        const session = result.sessionKind;
+        if (session) showToast(otherStageMessage(session, other));
+      }
       refocusScannerCapture();
     } catch (err) {
       setScanError(err instanceof Error ? err.message : 'Failed to look up cloth');
-      setStep('idle');
+      showToast(err instanceof Error ? err.message : 'Failed to look up cloth');
     } finally {
       setBusy(false);
     }
   }
 
-  const handleScanRef = useRef(handleScan);
-  handleScanRef.current = handleScan;
+  useEffect(() => {
+    handleScanRef.current = handleScan;
+  });
 
   useEffect(() => {
     if (!hardwareScanner || !scannerBus) return;
@@ -216,27 +442,39 @@ export function ScannerPage() {
   }, [location.state, location.pathname, navigate]);
 
   function resetScanner() {
-    setScannedCloth(null);
     setActivePieceId(null);
-    setSelectedCutterId('');
-    setSelectedTailorId('');
-    setExtraStaffIds({});
-    setCutterExpectedDate('');
-    setTailorExpectedDate('');
     setManualCode('');
     setScanError(null);
     setActionError(null);
+    setBasketIds([]);
+    setCustomerOrderIds([]);
+    setManageFromScan(null);
+    sessionKindRef.current = null;
     setStep('idle');
     refocusScannerCapture();
   }
 
+  function handleBasketChange(next: Cloth[]) {
+    setBasketIds(next.map((item) => item.id));
+    if (next.length === 0) {
+      sessionKindRef.current = null;
+      setActivePieceId(null);
+      setStep('idle');
+      refocusScannerCapture();
+      return;
+    }
+    const focus = next.find((item) => item.id === activePieceId) ?? next[0]!;
+    setActivePieceId(focus.id);
+  }
+
   useAndroidBackHandler(() => {
+    if (manageFromScan) return;
     if (step === 'scanning') {
       void cancelScanning();
-    } else if (step === 'result') {
+    } else if (step === 'result' || step === 'customer') {
       resetScanner();
     }
-  }, step === 'scanning' || step === 'result');
+  }, !manageFromScan && (step === 'scanning' || step === 'result' || step === 'customer'));
 
   async function handleManualLookup(event: FormEvent) {
     event.preventDefault();
@@ -252,172 +490,6 @@ export function ScannerPage() {
     if (code) void handleScan(code);
   }
 
-  async function handleSaveStaff() {
-    if (!activePiece) return;
-    if (!selectedCutterId) {
-      setActionError('Choose a cutter first.');
-      return;
-    }
-    setBusy(true);
-    setActionError(null);
-
-    try {
-      await assignCutter(
-        activePiece.id,
-        selectedCutterId || null,
-        cutterExpectedDate.trim() || null,
-      );
-      let updated = await assignTailor(
-        activePiece.id,
-        selectedTailorId || null,
-        tailorExpectedDate.trim() || null,
-        { startSewing: false },
-      );
-      if (!updated) return;
-      for (const role of extraStaffTypes) {
-        const next = await assignStaffJob(updated, role.slug, extraStaffIds[role.slug] || null);
-        if (next) updated = next;
-      }
-      setScannedCloth(updated);
-      setActivePieceId(updated.id);
-      await refetch();
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : 'Failed to assign staff');
-    } finally {
-      setBusy(false);
-      refocusScannerCapture();
-    }
-  }
-
-  async function handleCuttingDone() {
-    if (!activePiece) return;
-    const cutterId = selectedCutterId || activePiece.cutterId;
-    if (!cutterId) {
-      setActionError('Assign a cutter first, then mark cutting complete.');
-      return;
-    }
-    setBusy(true);
-    setActionError(null);
-
-    try {
-      await assignCutter(
-        activePiece.id,
-        cutterId,
-        cutterExpectedDate.trim() || null,
-      );
-      let latest = await assignTailor(
-        activePiece.id,
-        selectedTailorId || null,
-        tailorExpectedDate.trim() || null,
-        { startSewing: false },
-      );
-      if (!latest) return;
-      for (const role of extraStaffTypes) {
-        const next = await assignStaffJob(latest, role.slug, extraStaffIds[role.slug] || null);
-        if (next) latest = next;
-      }
-      const updated = await markCuttingComplete(latest.id);
-      if (!updated) return;
-      const nextId = scannedOrderCloths.find(
-        (piece) => piece.id !== activePiece.id && piece.status !== 'completed',
-      )?.id;
-      setScannedCloth(updated);
-      setActivePieceId(nextId ?? updated.id);
-      await refetch();
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : 'Failed to update cloth');
-    } finally {
-      setBusy(false);
-      refocusScannerCapture();
-    }
-  }
-
-  async function handleAssignTailor() {
-    if (!activePiece || !selectedTailorId || !tailorExpectedDate.trim()) return;
-    setBusy(true);
-    setActionError(null);
-
-    try {
-      let updated = await assignTailor(
-        activePiece.id,
-        selectedTailorId,
-        tailorExpectedDate.trim(),
-      );
-      if (!updated) return;
-      for (const role of extraStaffTypes) {
-        const next = await assignStaffJob(updated, role.slug, extraStaffIds[role.slug] || null);
-        if (next) updated = next;
-      }
-      setScannedCloth(updated);
-      setActivePieceId(updated.id);
-      await refetch();
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : 'Failed to assign tailor');
-    } finally {
-      setBusy(false);
-      refocusScannerCapture();
-    }
-  }
-
-  async function handleSaveExtraStaff() {
-    if (!activePiece) return;
-    setBusy(true);
-    setActionError(null);
-    try {
-      let latest = activePiece;
-      for (const role of extraStaffTypes) {
-        const next = await assignStaffJob(latest, role.slug, extraStaffIds[role.slug] || null);
-        if (next) latest = next;
-      }
-      setScannedCloth(latest);
-      setActivePieceId(latest.id);
-      await refetch();
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : 'Failed to assign staff');
-    } finally {
-      setBusy(false);
-      refocusScannerCapture();
-    }
-  }
-
-  async function handleSewingDone() {
-    if (!activePiece) return;
-    setBusy(true);
-    setActionError(null);
-
-    try {
-      const updated = await markSewingComplete(activePiece.id);
-      if (!updated) return;
-      const nextId = scannedOrderCloths.find(
-        (piece) => piece.id !== activePiece.id && piece.status !== 'completed',
-      )?.id;
-      setScannedCloth(updated);
-      setActivePieceId(nextId ?? updated.id);
-      await refetch();
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : 'Failed to complete cloth');
-    } finally {
-      setBusy(false);
-      refocusScannerCapture();
-    }
-  }
-
-  const scannedOrderCloths = scannedCloth ? getCustomerOrderCloths(scannedCloth, cloths) : [];
-  const activePiece =
-    scannedOrderCloths.find((piece) => piece.id === activePieceId) ?? scannedCloth;
-
-  const cutter = activePiece ? getStaffById(staff, activePiece.cutterId) : null;
-  const tailor = activePiece ? getStaffById(staff, activePiece.tailorId) : null;
-
-  useEffect(() => {
-    if (!activePiece) return;
-    setSelectedCutterId(activePiece.cutterId ?? '');
-    setSelectedTailorId(activePiece.tailorId ?? '');
-    setExtraStaffIds(extraStaffIdsFromCloth(activePiece, extraStaffTypes));
-    setCutterExpectedDate(activePiece.cutterExpectedDate ?? '');
-    setTailorExpectedDate(activePiece.tailorExpectedDate ?? '');
-  }, [activePiece?.id]);
-
   if (loading) {
     return (
       <div className="flex min-h-[50vh] items-center justify-center p-5">
@@ -429,102 +501,121 @@ export function ScannerPage() {
   return (
     <div className="p-5 pb-6">
       <PageHeader
-        title="Dashboard"
+        title="Home"
         subtitle={
           hardwareScanner
-            ? 'Scan with USB barcode scanner or enter cloth code'
-            : 'Scan barcode to update cloth status'
+            ? 'Scan a ticket to assign work. Keep scanning to add more of the same stage.'
+            : 'Look up a cloth code, then move it to the next stage.'
+        }
+        action={
+          hardwareScanner ? (
+            <div
+              className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold ${
+                scannerConnected
+                  ? 'border-done/40 text-done'
+                  : 'border-seam text-ink-muted'
+              }`}
+            >
+              <span
+                className={`h-2 w-2 rounded-full ${scannerConnected ? 'bg-done' : 'bg-ink-muted'}`}
+              />
+              {scannerConnected ? 'Barcode scanner ready' : 'Scanner disconnected'}
+            </div>
+          ) : null
         }
       />
 
       {(error || actionError) && (
-        <Card className="mb-4 border-rose-200 bg-rose-50 text-sm text-rose-700">
+        <Card className="mb-4 border-overdue/30 bg-white text-sm text-overdue">
           {error ?? actionError}
         </Card>
       )}
 
-      <PaymentDashboard cloths={cloths} />
-
-      <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Workflow</p>
-
-      <div className="mb-5 grid grid-cols-3 gap-2">
-        {[
-          { label: 'Cutting', value: counts.cutting, color: 'bg-amber-50 text-amber-700' },
-          { label: 'Ready for Tailor', value: counts.ready, color: 'bg-sky-50 text-sky-700' },
-          { label: 'Sewing', value: counts.sewing, color: 'bg-violet-50 text-violet-700' },
-        ].map((item) => (
-          <Card key={item.label} className={`py-3 text-center ${item.color}`}>
-            <p className="text-xl font-bold">{item.value}</p>
-            <p className="text-[10px] font-medium uppercase tracking-wide opacity-80">{item.label}</p>
-          </Card>
-        ))}
-      </div>
-
       {step === 'idle' && (
-        <div className="space-y-4">
-          {hardwareScanner && (
-            <Card
-              className={
-                scannerConnected
-                  ? 'border-emerald-200 bg-emerald-50/70'
-                  : 'border-slate-200 bg-slate-50'
-              }
-            >
-              <div className="flex items-center gap-3">
-                <span className="relative flex h-3 w-3 shrink-0">
-                  {scannerConnected && (
-                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
-                  )}
-                  <span
-                    className={`relative inline-flex h-3 w-3 rounded-full ${
-                      scannerConnected ? 'bg-emerald-500' : 'bg-slate-300'
-                    }`}
-                  />
-                </span>
-                <p
-                  className={`text-sm font-semibold ${
-                    scannerConnected ? 'text-emerald-900' : 'text-slate-600'
-                  }`}
-                >
-                  {scannerConnected ? 'Barcode connected' : 'Barcode scanner disconnected'}
+        <div className="space-y-5">
+          <div>
+            <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
+              <div>
+                <p className="font-display text-sm font-semibold text-ink">Today’s work</p>
+                <p className="mt-0.5 text-xs text-ink-muted">
+                  {homeStage === 'all' && homeDate
+                    ? `${todayBoard.due.length} due · ${todayBoard.done.length} done${
+                        todayBoard.overdue.length ? ` · ${todayBoard.overdue.length} overdue` : ''
+                      }`
+                    : `${getOrderRepresentatives(filteredHomeCloths, cloths).length} orders`}
                 </p>
               </div>
-            </Card>
-          )}
-
-          {cameraScanner && (
-            <Card className="flex flex-col items-center py-8 text-center">
-              <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-indigo-100 text-indigo-600">
-                <Camera className="h-8 w-8" />
+            </div>
+            <Card className="p-4">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+                <div className="flex flex-wrap items-end gap-2">
+                  <div className="w-[11.5rem]">
+                    <Input
+                      label="Date"
+                      type="date"
+                      value={homeDate}
+                      onChange={(event) => setHomeDate(event.target.value)}
+                    />
+                  </div>
+                  <Button type="button" variant="secondary" onClick={() => setHomeDate(todayDateString())}>
+                    Today
+                  </Button>
+                  {homeDate ? (
+                    <Button type="button" variant="ghost" onClick={() => setHomeDate('')}>
+                      All dates
+                    </Button>
+                  ) : null}
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {HOME_STAGE_FILTERS.map((item) => {
+                    const active = homeStage === item.id;
+                    return (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => setHomeStage(item.id)}
+                        className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
+                          active
+                            ? 'bg-ink text-white'
+                            : 'bg-linen text-ink-muted hover:bg-white hover:text-ink'
+                        }`}
+                      >
+                        {item.label}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
-              <p className="font-medium text-slate-800">Camera scanner</p>
-              <p className="mt-1 max-w-xs text-sm text-slate-500">
-                Use the phone camera to scan barcode labels
-              </p>
-              {scanError && (
-                <p className="mt-4 rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-600">{scanError}</p>
-              )}
-              <Button
-                onClick={startScanner}
-                disabled={busy}
-                className="mt-6 w-full max-w-xs rounded-full py-3.5"
-              >
-                <ScanLine className="h-5 w-5" />
-                Open Camera Scanner
-              </Button>
+              <div className="mt-4">
+                <HomeOrderRows
+                  key={`${homeStage}-${homeDate}`}
+                  pieces={filteredHomeCloths}
+                  allCloths={cloths}
+                  empty={
+                    homeStage === 'all' && homeDate
+                      ? 'Nothing due or done on this date.'
+                      : 'No orders match this date or type.'
+                  }
+                  onOpen={(code) => void handleScan(code)}
+                />
+              </div>
             </Card>
-          )}
+          </div>
 
-          <Card>
-            <div className="mb-3 flex items-center gap-2 text-slate-700">
-              <Hash className="h-4 w-4 text-indigo-600" />
-              <p className="text-sm font-semibold">
-                {hardwareScanner ? 'Scan or type cloth code' : 'Enter cloth code manually'}
-              </p>
+          <Card className="border-action/20 bg-action/5 p-5">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Hash className="h-4 w-4 text-action" />
+                <p className="font-display text-sm font-semibold text-ink">
+                  {hardwareScanner ? 'Scan or type a ticket' : 'Look up a ticket'}
+                </p>
+              </div>
             </div>
             <form onSubmit={handleManualLookup} className="flex items-end gap-2">
               <label className="flex-1">
-                <span className="mb-1.5 block text-xs font-medium text-slate-500">Cloth code</span>
+                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.08em] text-ink-muted">
+                  Cloth code
+                </span>
                 <input
                   ref={manualInputRef}
                   data-allow-typing
@@ -533,18 +624,20 @@ export function ScannerPage() {
                   onKeyDown={handleManualKeyDown}
                   placeholder="e.g. CL-001"
                   autoFocus={!hardwareScanner}
-                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 font-mono uppercase text-slate-900 outline-none focus:border-indigo-400 focus:bg-white focus:ring-2 focus:ring-indigo-100"
+                  className="w-full rounded-[10px] border border-seam bg-white px-4 py-3 font-mono uppercase text-ink outline-none focus:border-action focus:ring-2 focus:ring-action/20"
                 />
               </label>
-              <Button type="submit" disabled={busy || !manualCode.trim()} className="shrink-0 rounded-xl px-4">
+              <Button type="submit" disabled={busy || !manualCode.trim()} className="shrink-0 px-5">
                 Look up
               </Button>
             </form>
             {scanError && !cameraScanner && (
-              <p className="mt-3 rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-600">{scanError}</p>
+              <p className="mt-3 rounded-[10px] border border-overdue/30 bg-white px-3 py-2 text-sm text-overdue">
+                {scanError}
+              </p>
             )}
             {cloths.length > 0 && (
-              <div className="mt-3 flex flex-wrap gap-2">
+              <div className="mt-4 flex flex-wrap gap-2">
                 {(() => {
                   const seenCodes = new Set<string>();
                   return cloths
@@ -554,13 +647,13 @@ export function ScannerPage() {
                       seenCodes.add(c.code);
                       return true;
                     })
-                    .slice(0, 6)
+                    .slice(0, 8)
                     .map((cloth) => (
                       <button
                         key={cloth.code}
                         type="button"
                         onClick={() => handleScan(cloth.code)}
-                        className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 font-mono text-xs font-semibold text-indigo-600 transition hover:border-indigo-200 hover:bg-indigo-50"
+                        className="rounded-md border border-action/30 bg-white px-3 py-1 font-mono text-xs font-semibold text-action transition hover:border-action hover:bg-action/10"
                       >
                         {cloth.code}
                       </button>
@@ -569,6 +662,103 @@ export function ScannerPage() {
               </div>
             )}
           </Card>
+
+          {cameraScanner && (
+            <Card className="flex flex-col items-center py-6 text-center">
+              <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-[12px] border border-action/20 bg-white text-action">
+                <Camera className="h-6 w-6" />
+              </div>
+              <p className="font-medium text-ink">Phone camera</p>
+              <p className="mt-1 max-w-xs text-sm text-ink-muted">
+                Scan a printed ticket if the gun is not connected.
+              </p>
+              {scanError && (
+                <p className="mt-4 rounded-[10px] border border-overdue/30 bg-white px-3 py-2 text-sm text-overdue">
+                  {scanError}
+                </p>
+              )}
+              <Button onClick={startScanner} disabled={busy} className="mt-4 w-full max-w-xs">
+                <ScanLine className="h-5 w-5" />
+                Open camera
+              </Button>
+            </Card>
+          )}
+
+          <div>
+            <p className="mb-3 font-display text-sm font-semibold text-ink">Work in the shop</p>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              {([
+                { id: 'cutting' as const, label: 'Cutting', value: counts.cutting, tone: 'text-cut', fill: 'border-cut/30 bg-cut/10' },
+                { id: 'unassigned' as const, label: 'Unassigned', value: counts.unassigned, tone: 'text-ink-muted', fill: 'border-seam bg-slate-50' },
+                { id: 'tailoring' as const, label: 'Tailoring', value: counts.tailoring, tone: 'text-sew', fill: 'border-sew/30 bg-sew/10' },
+                { id: 'done' as const, label: 'Done', value: counts.done, tone: 'text-done', fill: 'border-done/30 bg-done/10' },
+              ]).map((item) => {
+                const active = homeStage === item.id;
+                return (
+                  <button
+                    key={item.label}
+                    type="button"
+                    aria-pressed={active}
+                    onClick={() => {
+                      if (active) {
+                        setHomeStage('all');
+                        setHomeDate(todayDateString());
+                        return;
+                      }
+                      setHomeStage(item.id);
+                      setHomeDate('');
+                    }}
+                    className={`rounded-[12px] border px-3 py-4 text-center shadow-sm transition ${item.fill} ${
+                      active ? 'ring-2 ring-ink/15' : ''
+                    }`}
+                  >
+                    <p className={`font-display text-3xl font-semibold tabular ${item.tone}`}>{item.value}</p>
+                    <p className={`mt-1 text-xs font-semibold ${item.tone}`}>{item.label}</p>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="mt-4 rounded-[12px] border border-seam bg-white p-4 shadow-sm">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-muted">Staff</p>
+              <ul className="mt-3 divide-y divide-seam">
+                {staffLoads.rows.map((row) => (
+                  <li key={`${row.stage}-${row.staffId}`} className="flex items-center justify-between gap-3 py-2 first:pt-0">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold text-ink">{row.name}</p>
+                      <p className={`text-xs font-medium ${row.stage === 'Cutting' ? 'text-cut' : 'text-sew'}`}>
+                        {row.stage}
+                      </p>
+                    </div>
+                    <p className={`font-display text-lg font-semibold tabular ${row.stage === 'Cutting' ? 'text-cut' : 'text-sew'}`}>
+                      {row.count}
+                    </p>
+                  </li>
+                ))}
+                {staffLoads.unassignedCutting > 0 ? (
+                  <li className="flex items-center justify-between gap-3 py-2">
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-ink">Unassigned</p>
+                      <p className="text-xs font-medium text-cut">Cutting</p>
+                    </div>
+                    <p className="font-display text-lg font-semibold tabular text-cut">{staffLoads.unassignedCutting}</p>
+                  </li>
+                ) : null}
+                <li className="flex items-center justify-between gap-3 py-2 last:pb-0">
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-ink">Ready for tailor</p>
+                    <p className="text-xs font-medium text-ready">Waiting</p>
+                  </div>
+                  <p className="font-display text-lg font-semibold tabular text-ready">{staffLoads.ready}</p>
+                </li>
+              </ul>
+            </div>
+          </div>
+
+          <div>
+            <p className="mb-3 font-display text-sm font-semibold text-ink">Money</p>
+            <PaymentDashboard cloths={cloths} />
+          </div>
         </div>
       )}
 
@@ -585,345 +775,107 @@ export function ScannerPage() {
       )}
 
       <Modal
-        open={step === 'result' && !!scannedCloth && !!activePiece}
-        title={activePiece ? `Order ${activePiece.code}` : 'Scan Result'}
+        open={step === 'customer' && customerOrder.length > 0 && !manageFromScan}
+        title={`Customer bill · ${customerBill.orderCode || customerOrder[0]?.code || ''}`}
+        size="lg"
         onClose={resetScanner}
       >
-        {activePiece && (
         <div className="space-y-4">
-          <Card>
-            <div className="mb-3 flex items-start justify-between gap-2">
+          <div>
+            <p className="font-display text-lg font-semibold text-ink">{customerBill.customerName}</p>
+            <p className="text-sm text-ink-muted">
+              {customerBill.pieceCount} {customerBill.pieceCount === 1 ? 'cloth' : 'cloths'}
+              {customerBill.givenDate ? ` · Order ${formatCalendarDate(customerBill.givenDate)}` : ''}
+              {customerBill.deliveryDate ? ` · Delivery ${formatCalendarDate(customerBill.deliveryDate)}` : ''}
+            </p>
+          </div>
+          <div className="space-y-2 border-t border-seam pt-3">
+            {groupClothsForCustomerBill(customerOrder).map((item, index) => (
+              <p key={`${item.name}-${index}`} className="text-sm font-semibold text-ink">
+                <span className="me-1.5 text-ink-muted">{index + 1}.</span>
+                {customerBillItemLabel(item)}
+              </p>
+            ))}
+          </div>
+          <div className="grid grid-cols-2 gap-3 rounded-[14px] border border-seam bg-white p-4">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-muted">Total</p>
+              <p className="mt-1 font-display text-xl font-bold tabular text-ink">
+                {formatCurrency(customerBill.totalBill - customerBill.totalDiscount)}
+              </p>
+            </div>
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-muted">Advance paid</p>
+              <p className="mt-1 font-display text-xl font-bold tabular text-done">
+                {formatCurrency(customerBill.totalAdvance)}
+              </p>
+            </div>
+            {customerBill.totalPart > 0 ? (
               <div>
-                <p className="font-mono text-lg font-bold text-indigo-600">{activePiece.code}</p>
-                <p className="font-semibold text-slate-900">{activePiece.customerName}</p>
-                {scannedOrderCloths.length > 1 ? (
-                  <div className="mt-2 space-y-1">
-                    <p className="text-xs font-medium text-slate-500">
-                      This scan is for {clothBillName(activePiece)} · {activePiece.code}. Tap another piece to track it, or scan its own staff ticket.
-                    </p>
-                    {scannedOrderCloths.map((piece) => (
-                      <button
-                        key={piece.id}
-                        type="button"
-                        onClick={() => setActivePieceId(piece.id)}
-                        className={`flex w-full items-center justify-between rounded-lg border px-3 py-2 text-left text-sm transition ${
-                          piece.id === activePiece.id
-                            ? 'border-indigo-300 bg-indigo-50'
-                            : 'border-slate-200 bg-white hover:border-slate-300'
-                        }`}
-                      >
-                        <span className="min-w-0">
-                          <span className="flex items-center gap-2 font-medium text-slate-800">
-                            {piece.status === 'completed' ? (
-                              <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />
-                            ) : (
-                              <span className="inline-block h-4 w-4 shrink-0 rounded border border-slate-300" />
-                            )}
-                            {clothBillName(piece)}
-                          </span>
-                          <span className="mt-0.5 block font-mono text-[11px] text-indigo-600">{piece.code}</span>
-                        </span>
-                        <Badge className={`shrink-0 ${CLOTH_STATUS_COLORS[piece.status]}`}>
-                          {CLOTH_STATUS_LABELS[piece.status]}
-                        </Badge>
-                      </button>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="text-sm text-slate-500">{clothDescription(activePiece)}</p>
-                )}
-              </div>
-              {scannedOrderCloths.length === 1 && (
-                <Badge className={`shrink-0 ${CLOTH_STATUS_COLORS[activePiece.status]}`}>
-                  {CLOTH_STATUS_LABELS[activePiece.status]}
-                </Badge>
-              )}
-            </div>
-            <div className="space-y-1 text-sm text-slate-600">
-              {cutter && (
-                <p>
-                  Cutter: <strong>{cutter.name}</strong>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-muted">Part paid</p>
+                <p className="mt-1 font-display text-xl font-bold tabular text-done">
+                  {formatCurrency(customerBill.totalPart)}
                 </p>
-              )}
-              {tailor && (
-                <p>
-                  Tailor: <strong>{tailor.name}</strong>
-                </p>
-              )}
-              {activePiece.notes && <p className="text-slate-400">Note: {activePiece.notes}</p>}
-              {(activePiece.givenDate ||
-                activePiece.deliveryDate ||
-                activePiece.cutterExpectedDate ||
-                activePiece.tailorExpectedDate) && (
-                <div className="mt-2 space-y-0.5">
-                  {activePiece.givenDate && (
-                    <p>
-                      Order: <strong>{formatCalendarDate(activePiece.givenDate)}</strong>
-                    </p>
-                  )}
-                  {activePiece.deliveryDate && (
-                    <p>
-                      Delivery: <strong>{formatCalendarDate(activePiece.deliveryDate)}</strong>
-                    </p>
-                  )}
-                  {activePiece.cutterExpectedDate && (
-                    <p
-                      className={
-                        activePiece.status === 'cutting' &&
-                        isPastDue(activePiece.cutterExpectedDate, false)
-                          ? 'text-rose-600'
-                          : ''
-                      }
-                    >
-                      Cutter by:{' '}
-                      <strong>{formatCalendarDate(activePiece.cutterExpectedDate)}</strong>
-                      {activePiece.status === 'cutting' &&
-                        isPastDue(activePiece.cutterExpectedDate, false) &&
-                        ' (overdue)'}
-                    </p>
-                  )}
-                  {activePiece.tailorExpectedDate && (
-                    <p
-                      className={
-                        activePiece.status === 'sewing' &&
-                        isPastDue(activePiece.tailorExpectedDate, false)
-                          ? 'text-rose-600'
-                          : ''
-                      }
-                    >
-                      Tailor by:{' '}
-                      <strong>{formatCalendarDate(activePiece.tailorExpectedDate)}</strong>
-                      {activePiece.status === 'sewing' &&
-                        isPastDue(activePiece.tailorExpectedDate, false) &&
-                        ' (overdue)'}
-                    </p>
-                  )}
-                </div>
-              )}
+              </div>
+            ) : null}
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-muted">Balance</p>
+              <p className="mt-1 font-display text-xl font-bold tabular text-cut">
+                {formatCurrency(customerBill.totalPending)}
+              </p>
             </div>
-            {activePiece.totalAmount > 0 && (
-              <div className="mt-3">
-                <PaymentSummary cloth={activePiece} />
-              </div>
-            )}
-          </Card>
-
-          {actionError && (
-            <Card className="border-rose-200 bg-rose-50 text-sm text-rose-700">
-              {actionError}
-            </Card>
-          )}
-
-          {activePiece.status === 'cutting' && !activePiece.cutterId && (
-            <Card className="border-amber-200 bg-amber-50/50">
-              <p className="mb-3 text-sm text-slate-700">
-                This cloth has no cutter yet. Assign a cutter first.
-              </p>
-              {cutters.length === 0 ? (
-                <p className="text-sm text-rose-600">Add a cutter in Staff first.</p>
-              ) : (
-                <>
-                  <Select
-                    label="Select Cutter"
-                    value={selectedCutterId}
-                    onChange={(e) => setSelectedCutterId(e.target.value)}
-                  >
-                    <option value="">Choose cutter</option>
-                    {cutters.map((member) => (
-                      <option key={member.id} value={member.id}>
-                        {member.name}
-                      </option>
-                    ))}
-                  </Select>
-                  <Input
-                    label="Cutter Expected Date"
-                    type="date"
-                    value={cutterExpectedDate}
-                    onChange={(e) => setCutterExpectedDate(e.target.value)}
-                    min={todayDateString()}
-                  />
-                  {tailors.length > 0 && (
-                    <>
-                      <Select
-                        label="Select Tailor (optional)"
-                        value={selectedTailorId}
-                        onChange={(e) => setSelectedTailorId(e.target.value)}
-                      >
-                        <option value="">Assign later</option>
-                        {tailors.map((member) => (
-                          <option key={member.id} value={member.id}>
-                            {member.name}
-                          </option>
-                        ))}
-                      </Select>
-                      <Input
-                        label="Tailor Expected Date"
-                        type="date"
-                        value={tailorExpectedDate}
-                        onChange={(e) => setTailorExpectedDate(e.target.value)}
-                        min={todayDateString()}
-                      />
-                    </>
-                  )}
-                  <Button
-                    onClick={() => void handleSaveStaff()}
-                    disabled={!selectedCutterId || busy}
-                    className="mt-4 w-full rounded-full py-3.5"
-                  >
-                    <UserPlus className="h-4 w-4" />
-                    {busy ? 'Saving...' : 'Assign Cutter'}
-                  </Button>
-                </>
-              )}
-            </Card>
-          )}
-
-          {activePiece.status === 'cutting' && Boolean(activePiece.cutterId) && (
-            <Card className="border-amber-200 bg-amber-50/50">
-              <p className="mb-3 text-sm text-slate-700">
-                Cutter finished? Mark cutting complete
-                {cutter ? ` for ${cutter.name}` : ''}.
-              </p>
-              {tailors.length > 0 && !activePiece.tailorId && (
-                <div className="mb-4 space-y-3">
-                  <Select
-                    label="Select Tailor (optional)"
-                    value={selectedTailorId}
-                    onChange={(e) => setSelectedTailorId(e.target.value)}
-                  >
-                    <option value="">Assign later</option>
-                    {tailors.map((member) => (
-                      <option key={member.id} value={member.id}>
-                        {member.name}
-                      </option>
-                    ))}
-                  </Select>
-                  <Input
-                    label="Tailor Expected Date"
-                    type="date"
-                    value={tailorExpectedDate}
-                    onChange={(e) => setTailorExpectedDate(e.target.value)}
-                    min={todayDateString()}
-                  />
-                </div>
-              )}
-              <Button
-                onClick={() => void handleCuttingDone()}
-                disabled={busy}
-                className="w-full rounded-full py-3.5"
-              >
-                <CheckCircle2 className="h-4 w-4" />
-                {busy ? 'Saving...' : 'Mark Cutting Complete'}
-              </Button>
-            </Card>
-          )}
-
-          {activePiece.status === 'ready_to_sew' && (
-            <Card className="border-sky-200 bg-sky-50/50">
-              <p className="mb-3 text-sm text-slate-700">Assign this cloth to a tailor for sewing.</p>
-              {tailors.length === 0 ? (
-                <p className="text-sm text-rose-600">Add a tailor in Staff first.</p>
-              ) : (
-                <>
-                  <Select
-                    label="Select Tailor"
-                    value={selectedTailorId}
-                    onChange={(e) => setSelectedTailorId(e.target.value)}
-                  >
-                    <option value="">Choose tailor</option>
-                    {tailors.map((member) => (
-                      <option key={member.id} value={member.id}>
-                        {member.name}
-                      </option>
-                    ))}
-                  </Select>
-                  <Input
-                    label="Tailor Expected Date"
-                    type="date"
-                    value={tailorExpectedDate}
-                    onChange={(e) => setTailorExpectedDate(e.target.value)}
-                    min={todayDateString()}
-                    required
-                  />
-                  <Button
-                    onClick={handleAssignTailor}
-                    disabled={!selectedTailorId || !tailorExpectedDate.trim() || busy}
-                    className="mt-4 w-full rounded-full py-3.5"
-                  >
-                    <UserPlus className="h-4 w-4" />
-                    {busy ? 'Saving...' : 'Assign to Tailor'}
-                  </Button>
-                </>
-              )}
-            </Card>
-          )}
-
-          {activePiece.status === 'sewing' && (
-            <Card className="border-violet-200 bg-violet-50/50">
-              <p className="mb-3 text-sm text-slate-700">
-                Tailor finished sewing? Mark this cloth as completed.
-              </p>
-              <Button
-                onClick={handleSewingDone}
-                disabled={busy}
-                className="w-full rounded-full py-3.5"
-              >
-                <CheckCircle2 className="h-4 w-4" />
-                {busy ? 'Saving...' : 'Mark Sewing Complete'}
-              </Button>
-            </Card>
-          )}
-
-          {extraStaffTypes.some((role) => staff.some((member) => member.type === role.slug)) && (
-            <Card className="border-slate-200 bg-slate-50/70">
-              <p className="mb-3 text-sm font-semibold text-slate-800">Other staff</p>
-              <div className="space-y-3">
-                {extraStaffTypes.map((role) => {
-                  const members = staff.filter((member) => member.type === role.slug);
-                  if (members.length === 0) return null;
-                  return (
-                    <Select
-                      key={role.slug}
-                      label={role.label}
-                      value={extraStaffIds[role.slug] ?? ''}
-                      onChange={(e) =>
-                        setExtraStaffIds((current) => ({ ...current, [role.slug]: e.target.value }))
-                      }
-                    >
-                      <option value="">Assign later</option>
-                      {members.map((member) => (
-                        <option key={member.id} value={member.id}>
-                          {member.name}
-                        </option>
-                      ))}
-                    </Select>
-                  );
-                })}
-              </div>
-              <Button
-                onClick={() => void handleSaveExtraStaff()}
-                disabled={busy}
-                className="mt-4 w-full rounded-full py-3"
-                variant="secondary"
-              >
-                <UserPlus className="h-4 w-4" />
-                {busy ? 'Saving...' : 'Save other staff'}
-              </Button>
-            </Card>
-          )}
-
-          {activePiece.status === 'completed' && (
-            <Card className="border-emerald-200 bg-emerald-50 text-center">
-              <CheckCircle2 className="mx-auto mb-2 h-10 w-10 text-emerald-500" />
-              <p className="font-semibold text-emerald-800">This cloth is already completed!</p>
-            </Card>
-          )}
-
-          <Button variant="secondary" onClick={resetScanner} className="w-full">
-            Scan Another
+          </div>
+          {customerBill.notes ? (
+            <p className="text-sm text-ink-muted">
+              <strong className="text-ink">Note:</strong> {customerBill.notes}
+            </p>
+          ) : null}
+          <Button
+            className="w-full rounded-full py-3"
+            onClick={() => setManageFromScan(customerOrder[0] ?? null)}
+          >
+            Manage payment
+          </Button>
+          <Button variant="secondary" className="w-full rounded-full py-3" onClick={resetScanner}>
+            Done
           </Button>
         </div>
-        )}
+      </Modal>
+
+      {manageClothLive ? (
+        <ClothManageSheet
+          cloth={manageClothLive}
+          orderCloths={customerOrder.length > 0 ? customerOrder : getCustomerOrderCloths(manageClothLive, cloths)}
+          allCloths={cloths}
+          staff={staff}
+          onClose={() => setManageFromScan(null)}
+          onUpdated={() => void refetch()}
+          onShowBarcode={() => setManageFromScan(null)}
+        />
+      ) : null}
+
+      <Modal
+        open={step === 'result' && basket.length > 0}
+        title={sessionModalTitle(sessionKindRef.current, basket.length, basket[0]?.code)}
+        size="lg"
+        onClose={resetScanner}
+      >
+        <div className="space-y-4">
+          <ScanBasketPanel
+            basket={basket}
+            cutters={cutters}
+            tailors={tailors}
+            busy={busy}
+            onBusy={setBusy}
+            onBasketChange={handleBasketChange}
+            onUpdated={() => refetch()}
+            onClear={resetScanner}
+            embedded
+          />
+          <Button variant="secondary" onClick={resetScanner} className="w-full">
+            Done
+          </Button>
+        </div>
       </Modal>
     </div>
   );

@@ -1,8 +1,9 @@
 import { supabase } from "./supabase";
 import { mapCloth, mapStaff } from "./mappers";
-import { nextClothCodes } from "./utils";
+import { nextClothCodes, generateOrderCode } from "./utils";
+import { collectedOrderCodes } from "./customer-order";
 import type { Cloth, ClothStaffJob, StaffType } from "../types";
-import { escapeIlike, CLOTH_PAGE_SIZE } from "./cloth-list";
+import { escapeIlike, CLOTH_PAGE_SIZE, clothSearchTokens } from "./cloth-list";
 import type { ClothStatusFilter } from "./cloth-list";
 
 import type { Database, Json } from "../types/database";
@@ -111,6 +112,24 @@ export async function fetchClothStatusCounts() {
   return counts;
 }
 
+function buildClothSearchOr(
+  search: string,
+  options: { orderCode: boolean; phone: boolean },
+) {
+  const tokens = clothSearchTokens(search);
+  const fields = ["code", "customer_name", "garment", "fabric_color", "size"];
+  if (options.orderCode) fields.push("order_code");
+  fields.push("measurement_checks->>orderCode");
+  if (options.phone) fields.push("customer_phone");
+  fields.push("measurement_checks->>customerPhone");
+  return tokens
+    .flatMap((token) => {
+      const pattern = `%${escapeIlike(token)}%`;
+      return fields.map((field) => `${field}.ilike.${pattern}`);
+    })
+    .join(",");
+}
+
 export async function fetchClothsPage(options: {
   page: number;
   pageSize?: number;
@@ -120,30 +139,40 @@ export async function fetchClothsPage(options: {
   const pageSize = options.pageSize ?? CLOTH_PAGE_SIZE;
   const from = options.page * pageSize;
   const to = from + pageSize - 1;
-
-  let query = supabase.from("cloths").select("*", { count: "exact" });
-
-  if (options.status && options.status !== "all") {
-    query = query.eq("status", options.status);
-  }
-
   const search = options.search?.trim();
-  if (search) {
-    const pattern = `%${escapeIlike(search)}%`;
-    query = query.or(
-      `code.ilike.${pattern},customer_name.ilike.${pattern},garment.ilike.${pattern},fabric_color.ilike.${pattern},size.ilike.${pattern}`,
-    );
+  const searchWithAll = search ? buildClothSearchOr(search, { orderCode: true, phone: true }) : "";
+  const searchWithoutOrderCode = search
+    ? buildClothSearchOr(search, { orderCode: false, phone: true })
+    : "";
+  const searchWithoutPhone = search
+    ? buildClothSearchOr(search, { orderCode: true, phone: false })
+    : "";
+  const searchBare = search ? buildClothSearchOr(search, { orderCode: false, phone: false }) : "";
+
+  async function run(orFilter: string) {
+    let query = supabase.from("cloths").select("*", { count: "exact" });
+    if (options.status && options.status !== "all") {
+      query = query.eq("status", options.status);
+    }
+    if (orFilter) query = query.or(orFilter);
+    return query.order("updated_at", { ascending: false }).range(from, to);
   }
 
-  const { data, error, count } = await query
-    .order("updated_at", { ascending: false })
-    .range(from, to);
-
-  if (error) throw error;
+  let result = await run(searchWithAll);
+  if (result.error && search && isMissingOrderCodeColumn(result.error)) {
+    result = await run(searchWithoutOrderCode);
+  }
+  if (result.error && search && isMissingCustomerPhoneColumn(result.error)) {
+    result = await run(searchWithoutPhone);
+  }
+  if (result.error && search && (isMissingOrderCodeColumn(result.error) || isMissingCustomerPhoneColumn(result.error))) {
+    result = await run(searchBare);
+  }
+  if (result.error) throw result.error;
 
   return {
-    cloths: (data ?? []).map(mapCloth),
-    total: count ?? 0,
+    cloths: (result.data ?? []).map(mapCloth),
+    total: result.count ?? 0,
   };
 }
 
@@ -235,6 +264,7 @@ export type RegisterClothInput = {
   tailorPayAmount?: number;
   code?: string;
   orderBatchId?: string;
+  orderCode?: string;
   staffJobs?: import("../types").ClothStaffJob[];
 };
 
@@ -261,6 +291,7 @@ function toClothInsertRow(
       finalPaymentDate: '',
       deliveryDate: input.deliveryDate,
       orderBatchId: input.orderBatchId,
+      orderCode: input.orderCode,
       staffJobs: input.staffJobs ?? [],
       customerPhone: input.customerPhone,
     }),
@@ -285,6 +316,7 @@ function toClothInsertRow(
     given_date: input.givenDate,
     cutter_expected_date: input.cutterExpectedDate,
     tailor_expected_date: input.tailorExpectedDate || null,
+    order_code: input.orderCode?.trim() || "",
   };
 }
 
@@ -296,23 +328,35 @@ function isMissingStaffJobsColumn(error: { message?: string } | null) {
   return Boolean(error?.message && /staff_jobs/i.test(error.message));
 }
 
-async function insertClothRows(rows: ReturnType<typeof toClothInsertRow>[]) {
-  const first = await supabase.from("cloths").insert(rows).select("*");
-  if (first.error && isMissingStaffJobsColumn(first.error)) {
-    const strippedJobs = rows.map(({ staff_jobs: _jobs, ...rest }) => rest);
-    return insertClothRowsWithoutPhoneFallback(strippedJobs);
-  }
-  if (!first.error || !isMissingCustomerPhoneColumn(first.error)) return first;
-
-  const stripped = rows.map(({ customer_phone: _phone, ...rest }) => rest);
-  return supabase.from("cloths").insert(stripped).select("*");
+function isMissingOrderCodeColumn(error: { message?: string } | null) {
+  return Boolean(error?.message && /order_code/i.test(error.message));
 }
 
-async function insertClothRowsWithoutPhoneFallback(rows: Omit<ReturnType<typeof toClothInsertRow>, "staff_jobs">[]) {
-  const first = await supabase.from("cloths").insert(rows).select("*");
-  if (!first.error || !isMissingCustomerPhoneColumn(first.error)) return first;
-  const stripped = rows.map(({ customer_phone: _phone, ...rest }) => rest);
-  return supabase.from("cloths").insert(stripped).select("*");
+function withoutKey(rows: Record<string, unknown>[], key: string) {
+  return rows.map((row) => {
+    const next = { ...row };
+    delete next[key];
+    return next;
+  });
+}
+
+async function insertClothRows(rows: ReturnType<typeof toClothInsertRow>[]) {
+  let current: Record<string, unknown>[] = rows as Record<string, unknown>[];
+  let result = await supabase.from("cloths").insert(current as never).select("*");
+
+  if (result.error && isMissingOrderCodeColumn(result.error)) {
+    current = withoutKey(current, "order_code");
+    result = await supabase.from("cloths").insert(current as never).select("*");
+  }
+  if (result.error && isMissingStaffJobsColumn(result.error)) {
+    current = withoutKey(current, "staff_jobs");
+    result = await supabase.from("cloths").insert(current as never).select("*");
+  }
+  if (result.error && isMissingCustomerPhoneColumn(result.error)) {
+    current = withoutKey(current, "customer_phone");
+    result = await supabase.from("cloths").insert(current as never).select("*");
+  }
+  return result;
 }
 
 export async function registerCloth(input: RegisterClothInput) {
@@ -329,9 +373,16 @@ export async function registerClothOrder(inputs: RegisterClothInput[]) {
   const existing = await fetchCloths();
   const usedCodes = [...new Set(existing.map((cloth) => cloth.code))];
   const generated = nextClothCodes(usedCodes, inputs.length);
+  const orderCode =
+    inputs.find((input) => input.orderCode?.trim())?.orderCode?.trim() ||
+    generateOrderCode(collectedOrderCodes(existing));
 
   const rows = inputs.map((input, index) =>
-    toClothInsertRow(userId, input, input.code?.trim() || generated[index]!),
+    toClothInsertRow(
+      userId,
+      { ...input, orderCode: input.orderCode?.trim() || orderCode },
+      input.code?.trim() || generated[index]!,
+    ),
   );
 
   const inserted = await insertClothRows(rows);
@@ -365,6 +416,18 @@ export async function updateClothMeasurements(
       }),
       measurement_image: null,
     })
+    .eq("id", id)
+    .select("*")
+    .single();
+
+  if (error) throw error;
+  return mapCloth(data);
+}
+
+export async function updateClothNotes(id: string, notes: string) {
+  const { data, error } = await supabase
+    .from("cloths")
+    .update({ notes })
     .eq("id", id)
     .select("*")
     .single();
@@ -533,7 +596,60 @@ export async function getClothByCode(code: string) {
     .maybeSingle();
 
   if (error) throw error;
-  return data ? mapCloth(data) : null;
+  if (data) return mapCloth(data);
+
+  if (/^OR-?\d+$/i.test(normalized)) {
+    const hyphenated = normalized.includes("-")
+      ? normalized
+      : `OR-${normalized.slice(2)}`;
+    const byColumn = await supabase
+      .from("cloths")
+      .select("*")
+      .or(`order_code.eq.${hyphenated},order_code.eq.${normalized}`)
+      .order("created_at", { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    if (!byColumn.error && byColumn.data) return mapCloth(byColumn.data);
+
+    const { data: byOrder, error: orderError } = await supabase
+      .from("cloths")
+      .select("*")
+      .or(
+        `measurement_checks->>orderCode.eq.${hyphenated},measurement_checks->>orderCode.eq.${normalized}`,
+      )
+      .order("created_at", { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    if (orderError) throw orderError;
+    return byOrder ? mapCloth(byOrder) : null;
+  }
+
+  return null;
+}
+
+export async function listClothsByOrderCode(code: string) {
+  const normalized = code.trim().toUpperCase();
+  if (!/^OR-?\d+$/i.test(normalized)) return [];
+  const hyphenated = normalized.includes("-")
+    ? normalized
+    : `OR-${normalized.slice(2)}`;
+  const byColumn = await supabase
+    .from("cloths")
+    .select("*")
+    .or(`order_code.eq.${hyphenated},order_code.eq.${normalized}`)
+    .order("created_at", { ascending: true });
+  if (!byColumn.error && byColumn.data && byColumn.data.length > 0) {
+    return byColumn.data.map(mapCloth);
+  }
+  const { data, error } = await supabase
+    .from("cloths")
+    .select("*")
+    .or(
+      `measurement_checks->>orderCode.eq.${hyphenated},measurement_checks->>orderCode.eq.${normalized}`,
+    )
+    .order("created_at", { ascending: true });
+  if (error) throw error;
+  return (data ?? []).map(mapCloth);
 }
 
 export async function markCuttingComplete(id: string) {

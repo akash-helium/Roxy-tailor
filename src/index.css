@@ -1,17 +1,4 @@
-@import "tailwindcss";
-
-@theme {
-  --font-sans: 'Inter', system-ui, sans-serif;
-}
-
-:root {
-  font-family: var(--font-sans);
-  line-height: 1.5;
-  font-weight: 400;
-  color-scheme: light;
-  color: #0f172a;
-  background-color: #f4f6fb;
-}
+@import "./styles/atelier.css";
 
 :root {
   --android-safe-top: 0px;
@@ -24,19 +11,11 @@
   --app-safe-right: max(env(safe-area-inset-right, 0px), var(--android-safe-right));
 }
 
-body {
-  margin: 0;
-  min-width: 320px;
-  min-height: 100vh;
-  min-height: 100dvh;
-  background: linear-gradient(180deg, #f8faff 0%, #f4f6fb 100%);
-}
-
 #root,
 .app-root {
   min-height: 100dvh;
 }
 
 #barcode-reader video {
-  border-radius: 1rem;
+  border-radius: 10px;
 }

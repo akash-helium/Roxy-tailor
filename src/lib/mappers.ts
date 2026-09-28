@@ -35,6 +35,7 @@ export function mapCloth(row: ClothRow): Cloth {
     measurements: parseJsonRecord<Record<string, string>>(row.measurements, {}),
     inGroup: checks.inGroup,
     orderBatchId: checks.orderBatchId,
+    orderCode: (row.order_code ?? '').trim() || checks.orderCode,
     staffJobs: (() => {
       const fromChecks = checks.staffJobs;
       const fromColumn = parseClothStaffJobs(row.staff_jobs);

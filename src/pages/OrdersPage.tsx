@@ -1,33 +1,47 @@
 import { useMemo, useState, type FormEvent } from 'react';
-import { CheckCircle2, Circle, Plus, Printer, Receipt, Search, Settings2, Trash2, UserCog } from 'lucide-react';
+import { Navigate, useParams } from 'react-router-dom';
+import { CheckCircle2, ChevronDown, Circle, Phone, Plus, Printer, Receipt, Search, Settings2, Trash2, UserCog } from 'lucide-react';
 import { assignCutter, assignStaffJob, assignTailor, deleteCloths, getStaffById, registerClothOrder, setClothDone } from '../lib/data';
 import { useClothList } from '../hooks/useClothList';
 import {
   CLOTH_FILTER_OPTIONS,
+  clothMatchesSearch,
   type ClothStatusFilter,
 } from '../lib/cloth-list';
 import {
-  CLOTH_STATUS_COLORS,
-  CLOTH_STATUS_LABELS,
   type Cloth,
   type Staff,
 } from '../types';
-import { formatDate, formatCalendarDate, isPastDue, todayDateString, clothDescription, clothBillName } from '../lib/utils';
+import { clothStageBadge, orderStageBadge } from '../lib/cloth-status';
+import { formatDate, formatCalendarDate, isPastDue, todayDateString, clothBillName } from '../lib/utils';
 import { formatCurrency, parseAmount, summarizePayments } from '../lib/payments';
 import { BarcodePrintSheet } from '../components/BarcodePrintSheet';
 import { CustomerBillPrintSheet } from '../components/CustomerBillPrintSheet';
 import { RegisterPrintPrompt } from '../components/RegisterPrintPrompt';
-import { getCustomerOrderCloths, getOrderRepresentatives, groupClothsForStaffTickets, orderWorkflowStatus } from '../lib/customer-order';
+import {
+  getCustomerOrderCloths,
+  getOrderRepresentatives,
+  groupClothsForCustomerBill,
+  groupClothsForStaffTickets,
+  resolveOrderCodeMap,
+  customerOrderKey,
+  clothCodeRange,
+  orderMatchesBoard,
+  parseOrderBoard,
+  type OrderBoard,
+} from '../lib/customer-order';
 import { ClothManageSheet } from '../components/ClothManageSheet';
 import { GarmentSizingForm, emptyGarmentSizing } from '../components/GarmentSizingForm';
 import type { MeasurementData } from '../lib/measurements';
 import { Badge, Button, Card, Input, Modal, PageHeader, Select, Textarea } from '../components/ui';
 import { garmentDisplayLabel, getGarmentType } from '../lib/garments';
 import { formatMeasurementsSummary } from '../lib/measurements';
-import { findCustomerByPhone, findKnownCustomer, latestSizingForCustomer, listKnownCustomers, suggestCustomersByPhone } from '../lib/customer-history';
+import { findCustomerOnPhone, latestSizingForCustomer, listCustomersByPhone, suggestCustomersByPhone } from '../lib/customer-history';
 import { emptyStaffJob, staffRateForGarment } from '../lib/staff-jobs';
 import { useStaffTypes } from '../contexts/StaffTypesContext';
 import {
+  customerTelHref,
+  dialCustomerPhone,
   normalizeCustomerPhone,
   openWhatsAppPlaceholder,
   sendOrderConfirmationWhatsApp,
@@ -44,6 +58,7 @@ type ClothLineItem = {
   cutterPayAmount: string;
   tailorPayAmount: string;
   extraStaff: Record<string, { staffId: string; payAmount: string }>;
+  notes: string;
 };
 
 function newClothLineItem(
@@ -58,6 +73,7 @@ function newClothLineItem(
       | 'cutterPayAmount'
       | 'tailorPayAmount'
       | 'extraStaff'
+      | 'notes'
     >
   >,
 ): ClothLineItem {
@@ -72,12 +88,27 @@ function newClothLineItem(
     cutterPayAmount: defaults?.cutterPayAmount ?? '',
     tailorPayAmount: defaults?.tailorPayAmount ?? '',
     extraStaff: defaults?.extraStaff ?? {},
+    notes: defaults?.notes ?? '',
   };
 }
 
 function parseLineQuantity(value: string) {
   const parsed = Math.floor(Number(value));
   return Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, 50) : 1;
+}
+
+function registerStaffOwedCopy(args: {
+  assigned: boolean;
+  rate: number;
+  qty: number;
+  role: string;
+  garmentLabel: string;
+}) {
+  if (!args.assigned) return 'No payout until you assign';
+  if (!(args.rate > 0)) {
+    return 'Set staff rate for this cloth type, else they won’t appear as payable';
+  }
+  return `This ${args.role} will be owed ${formatCurrency(args.rate * args.qty)} for ${args.qty} ${args.garmentLabel}`;
 }
 
 function totalPiecesFromItems(items: ClothLineItem[]) {
@@ -109,10 +140,65 @@ function countForFilter(filter: ClothStatusFilter, counts: ReturnType<typeof use
   return counts.completed;
 }
 
+const BOARD_COPY: Record<OrderBoard, { title: string; subtitle: string; empty: string; emptyHint: string }> = {
+  all: {
+    title: 'All orders',
+    subtitle: 'Every order in one list. Filter by stage when you need it.',
+    empty: 'No orders yet',
+    emptyHint: 'Register a cloth to start the workflow',
+  },
+  pending: {
+    title: 'Pending orders',
+    subtitle: 'Work still in the shop. Register a new order here.',
+    empty: 'No pending orders',
+    emptyHint: 'Register a cloth to start the workflow',
+  },
+  done: {
+    title: 'Done orders',
+    subtitle: 'Finished orders, kept off the pending list.',
+    empty: 'No done orders',
+    emptyHint: 'Completed orders will show here',
+  },
+  payments: {
+    title: 'Pending payments',
+    subtitle: 'Orders with money still due. Call the customer from the row.',
+    empty: 'No pending payments',
+    emptyHint: 'Orders with a balance will show here',
+  },
+};
+
+function CompactStaffSelect({
+  label,
+  value,
+  disabled,
+  onChange,
+  children,
+}: {
+  label: string;
+  value: string;
+  disabled?: boolean;
+  onChange: (value: string) => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <Select
+      label={label}
+      value={value}
+      disabled={disabled}
+      searchable={false}
+      onChange={(event) => onChange(event.target.value)}
+    >
+      {children}
+    </Select>
+  );
+}
+
 function ClothListItem({
   cloth,
   staff,
   allCloths,
+  orderCode,
+  showCall,
   onReprint,
   onPrintBill,
   onManage,
@@ -122,6 +208,8 @@ function ClothListItem({
   cloth: Cloth;
   staff: Staff[];
   allCloths: Cloth[];
+  orderCode: string;
+  showCall?: boolean;
   onReprint: (cloths: Cloth[]) => void;
   onPrintBill: (cloths: Cloth[]) => void;
   onManage: (cloth: Cloth) => void;
@@ -132,7 +220,7 @@ function ClothListItem({
   const orderPieceCount = orderCloths.length;
   const staffTicketCount = groupClothsForStaffTickets(orderCloths).length;
   const orderPayments = summarizePayments(orderCloths);
-  const status = orderWorkflowStatus(orderCloths);
+  const stage = orderStageBadge(orderCloths);
   const cutter = getStaffById(staff, cloth.cutterId);
   const tailor = getStaffById(staff, cloth.tailorId);
   const cutterOverdue =
@@ -140,12 +228,15 @@ function ClothListItem({
   const tailorOverdue =
     cloth.status === 'sewing' && isPastDue(cloth.tailorExpectedDate, false);
 
-  const { types: staffRoleTypes, getLabel: staffTypeLabel } = useStaffTypes();
+  const { types: staffRoleTypes } = useStaffTypes();
   const extraStaffTypes = staffRoleTypes.filter((item) => item.slug !== 'cutter' && item.slug !== 'tailor');
   const cutters = staff.filter((m) => m.type === 'cutter');
   const tailors = staff.filter((m) => m.type === 'tailor');
   const [assignOpen, setAssignOpen] = useState(false);
-  const [assigning, setAssigning] = useState(false);
+  const [piecesOpen, setPiecesOpen] = useState(false);
+  const [assignDraft, setAssignDraft] = useState<
+    Record<string, { cutterId?: string; tailorId?: string; extra?: Record<string, string> }>
+  >({});
   const [assignError, setAssignError] = useState<string | null>(null);
   const [doneBusy, setDoneBusy] = useState(false);
   const [doneError, setDoneError] = useState<string | null>(null);
@@ -154,21 +245,47 @@ function ClothListItem({
 
   const isDone = cloth.status === 'completed';
 
+  function cutterValue(piece: Cloth) {
+    return assignDraft[piece.id]?.cutterId ?? piece.cutterId ?? '';
+  }
+
+  function tailorValue(piece: Cloth) {
+    return assignDraft[piece.id]?.tailorId ?? piece.tailorId ?? '';
+  }
+
+  function extraValue(piece: Cloth, type: string) {
+    return (
+      assignDraft[piece.id]?.extra?.[type] ??
+      (piece.staffJobs ?? []).find((job) => job.type === type)?.staffId ??
+      ''
+    );
+  }
+
   async function handleAssignCutter(piece: Cloth, value: string) {
-    setAssigning(true);
+    const previous = cutterValue(piece);
+    setAssignDraft((current) => ({
+      ...current,
+      [piece.id]: { ...current[piece.id], cutterId: value },
+    }));
     setAssignError(null);
     try {
       await assignCutter(piece.id, value || null);
       await onAssigned();
     } catch (err) {
+      setAssignDraft((current) => ({
+        ...current,
+        [piece.id]: { ...current[piece.id], cutterId: previous },
+      }));
       setAssignError(err instanceof Error ? err.message : 'Failed to assign cutter');
-    } finally {
-      setAssigning(false);
     }
   }
 
   async function handleAssignTailor(piece: Cloth, value: string) {
-    setAssigning(true);
+    const previous = tailorValue(piece);
+    setAssignDraft((current) => ({
+      ...current,
+      [piece.id]: { ...current[piece.id], tailorId: value },
+    }));
     setAssignError(null);
     try {
       const startSewing = piece.status === 'ready_to_sew' || piece.status === 'sewing';
@@ -177,22 +294,48 @@ function ClothListItem({
       });
       await onAssigned();
     } catch (err) {
+      setAssignDraft((current) => ({
+        ...current,
+        [piece.id]: { ...current[piece.id], tailorId: previous },
+      }));
       setAssignError(err instanceof Error ? err.message : 'Failed to assign tailor');
-    } finally {
-      setAssigning(false);
     }
   }
 
   async function handleAssignExtra(piece: Cloth, type: string, value: string) {
-    setAssigning(true);
+    const previous = extraValue(piece, type);
+    setAssignDraft((current) => ({
+      ...current,
+      [piece.id]: {
+        ...current[piece.id],
+        extra: { ...current[piece.id]?.extra, [type]: value },
+      },
+    }));
     setAssignError(null);
     try {
       await assignStaffJob(piece, type, value || null);
       await onAssigned();
     } catch (err) {
+      setAssignDraft((current) => ({
+        ...current,
+        [piece.id]: {
+          ...current[piece.id],
+          extra: { ...current[piece.id]?.extra, [type]: previous },
+        },
+      }));
       setAssignError(err instanceof Error ? err.message : 'Failed to assign staff');
-    } finally {
-      setAssigning(false);
+    }
+  }
+
+  async function handleAssignAll(role: 'cutter' | 'tailor', value: string) {
+    setAssignError(null);
+    try {
+      for (const piece of orderCloths) {
+        if (role === 'cutter') await handleAssignCutter(piece, value);
+        else await handleAssignTailor(piece, value);
+      }
+    } catch (err) {
+      setAssignError(err instanceof Error ? err.message : 'Failed to assign staff');
     }
   }
 
@@ -228,64 +371,59 @@ function ClothListItem({
     }
   }
 
+  const garmentLines = groupClothsForCustomerBill(orderCloths);
+  const pieceCodes = clothCodeRange(orderCloths.map((piece) => piece.code));
+  const telHref = cloth.customerPhone ? customerTelHref(cloth.customerPhone) : null;
+
   return (
-    <Card>
-      <div className="mb-2 flex items-start justify-between gap-2">
+    <Card className={`ticket-stub p-0 ${assignOpen ? 'overflow-visible' : 'overflow-hidden'}`}>
+      <div className="flex items-start justify-between gap-3 p-4 pb-3">
         <div className="min-w-0 flex-1">
           <p className="truncate font-bold text-slate-900">{cloth.customerName || 'Unknown'}</p>
           {cloth.customerPhone ? (
             <p className="truncate text-xs text-slate-400">{cloth.customerPhone}</p>
           ) : null}
-          {orderPieceCount > 1 ? (
-            <div className="mt-1 space-y-1">
-              {orderCloths.map((piece) => {
-                const pieceStatus = piece.status in CLOTH_STATUS_LABELS ? piece.status : 'cutting';
-                return (
-                  <button
-                    key={piece.id}
-                    type="button"
-                    onClick={() => onManage(piece)}
-                    className="flex w-full items-center justify-between gap-2 rounded-lg px-0 py-0.5 text-left"
-                  >
-                    <span className="min-w-0 truncate text-sm text-slate-500">
-                      {clothBillName(piece)}
-                      <span className="ml-1.5 font-mono text-[11px] text-indigo-600">{piece.code}</span>
-                    </span>
-                    <Badge className={`shrink-0 ${CLOTH_STATUS_COLORS[pieceStatus]}`}>
-                      {CLOTH_STATUS_LABELS[pieceStatus]}
-                    </Badge>
-                  </button>
-                );
-              })}
-            </div>
-          ) : (
-            <p className="truncate text-sm text-slate-500">{clothDescription(cloth)}</p>
-          )}
         </div>
-        <Badge className={`shrink-0 ${CLOTH_STATUS_COLORS[status]}`}>
-          {CLOTH_STATUS_LABELS[status]}
-        </Badge>
+        <div className="flex shrink-0 items-center gap-2">
+          {showCall && telHref ? (
+            <a
+              href={telHref}
+              className="inline-flex min-h-11 items-center gap-1.5 rounded-full bg-action px-3 text-xs font-semibold text-white hover:bg-action-deep active:scale-[0.97]"
+              onClick={(event) => {
+                if (!window.tailorDesktop?.openExternal) return;
+                event.preventDefault();
+                dialCustomerPhone(cloth.customerPhone);
+              }}
+            >
+              <Phone className="h-3.5 w-3.5" />
+              Call
+            </a>
+          ) : null}
+          <Badge className={`shrink-0 ${stage.className}`}>
+            {stage.label}
+          </Badge>
+        </div>
       </div>
-      <div className="mb-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500">
-        <span className="font-mono font-semibold text-indigo-600">
-          {cloth.code}
-          {orderPieceCount > 1 && (
-            <span className="ml-1 font-sans font-medium text-slate-500">
-              · {orderPieceCount} pieces
-            </span>
-          )}
+
+      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-4 text-xs text-slate-500">
+        <span className="font-mono text-sm font-semibold tracking-wide text-ink">{orderCode}</span>
+        <span>
+          {orderPieceCount} piece{orderPieceCount === 1 ? '' : 's'}
         </span>
+        {orderPieceCount === 1 && (
+          <span className="font-mono text-ink">{cloth.code}</span>
+        )}
         {orderPieceCount === 1 && cutter && <span>Cutter: {cutter.name}</span>}
         {orderPieceCount === 1 && tailor && <span>Tailor: {tailor.name}</span>}
         {cloth.givenDate && <span>Order: {formatCalendarDate(cloth.givenDate)}</span>}
         {cloth.deliveryDate && <span>Delivery: {formatCalendarDate(cloth.deliveryDate)}</span>}
-        {cloth.cutterExpectedDate && (
+        {orderPieceCount === 1 && cloth.cutterExpectedDate && (
           <span className={cutterOverdue ? 'font-semibold text-rose-600' : ''}>
             Cutter by: {formatCalendarDate(cloth.cutterExpectedDate)}
             {cutterOverdue ? ' (overdue)' : ''}
           </span>
         )}
-        {cloth.tailorExpectedDate && (
+        {orderPieceCount === 1 && cloth.tailorExpectedDate && (
           <span className={tailorOverdue ? 'font-semibold text-rose-600' : ''}>
             Tailor by: {formatCalendarDate(cloth.tailorExpectedDate)}
             {tailorOverdue ? ' (overdue)' : ''}
@@ -304,138 +442,222 @@ function ClothListItem({
           </span>
         )}
       </div>
-      <div className="flex flex-wrap gap-2">
+
+      <div className="mt-2 flex flex-wrap gap-1.5 px-4">
+        {garmentLines.map((item) => (
+          <span
+            key={item.name}
+            className="inline-flex max-w-full items-center rounded-full border border-seam bg-paper px-2.5 py-0.5 text-[11px] font-medium text-ink"
+          >
+            <span className="truncate">{item.name}</span>
+            {item.quantity > 1 ? (
+              <span className="ml-1 tabular-nums text-ink-muted">×{item.quantity}</span>
+            ) : null}
+          </span>
+        ))}
+      </div>
+
+      {orderPieceCount > 1 && (
+        <div className="px-4 pt-2">
+          <button
+            type="button"
+            onClick={() => setPiecesOpen((open) => !open)}
+            className="inline-flex items-center gap-1 text-xs font-medium text-action"
+          >
+            <ChevronDown className={`h-3.5 w-3.5 transition ${piecesOpen ? 'rotate-180' : ''}`} />
+            {piecesOpen ? 'Hide cloths' : `Cloths ${pieceCodes}`}
+          </button>
+          {piecesOpen && (
+            <div className="mt-2 max-h-44 space-y-1 overflow-y-auto rounded-xl border border-seam bg-paper/70 p-2">
+              {orderCloths.map((piece) => {
+                const pieceStage = clothStageBadge(piece);
+                return (
+                  <button
+                    key={piece.id}
+                    type="button"
+                    onClick={() => onManage(piece)}
+                    className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-white"
+                  >
+                    <span className="w-16 shrink-0 font-mono text-[11px] font-semibold text-ink">
+                      {piece.code}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate text-sm text-slate-600">
+                      {clothBillName(piece)}
+                    </span>
+                    <Badge className={`shrink-0 ${pieceStage.className}`}>
+                      {pieceStage.label}
+                    </Badge>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="flex flex-wrap items-center gap-1.5 bg-white px-4 pt-4 pb-3">
         <Button
-          variant="secondary"
+          size="sm"
+          variant={assignOpen ? 'primary' : 'secondary'}
           onClick={() => setAssignOpen((v) => !v)}
-          className="rounded-full px-3 py-1.5 text-xs"
         >
           <UserCog className="h-3.5 w-3.5" />
           Assign
         </Button>
-        <Button
-          variant="secondary"
-          onClick={() => onManage(cloth)}
-          className="rounded-full px-3 py-1.5 text-xs"
-        >
+        <Button size="sm" variant="primary" onClick={() => onManage(cloth)}>
           <Settings2 className="h-3.5 w-3.5" />
           Manage
         </Button>
-        <Button
-          variant="secondary"
-          onClick={() => onPrintBill(orderCloths)}
-          className="rounded-full px-3 py-1.5 text-xs"
-        >
+        <Button size="sm" variant="secondary" onClick={() => onPrintBill(orderCloths)}>
           <Receipt className="h-3.5 w-3.5" />
-          {orderPieceCount > 1 ? `Print Bill (${orderPieceCount})` : 'Print Bill'}
+          {orderPieceCount > 1 ? `Print bill (${orderPieceCount})` : 'Print bill'}
         </Button>
-        <Button
-          variant="secondary"
-          onClick={() => onReprint(orderCloths)}
-          className="rounded-full px-3 py-1.5 text-xs"
-        >
+        <Button size="sm" variant="secondary" onClick={() => onReprint(orderCloths)}>
           <Printer className="h-3.5 w-3.5" />
-          {staffTicketCount > 1 ? `Staff Tickets (${staffTicketCount})` : 'Staff Barcode'}
+          {staffTicketCount > 1 ? `Staff barcode (${staffTicketCount})` : 'Staff barcode'}
         </Button>
         {orderPieceCount === 1 && (
         <Button
+          size="sm"
           variant={isDone ? 'primary' : 'secondary'}
           onClick={() => void handleToggleDone()}
           disabled={doneBusy}
-          className={`rounded-full px-3 py-1.5 text-xs ${isDone ? 'bg-emerald-600 hover:bg-emerald-700' : ''}`}
+          className={isDone ? 'bg-done hover:bg-done/90' : undefined}
         >
           {isDone ? <CheckCircle2 className="h-3.5 w-3.5" /> : <Circle className="h-3.5 w-3.5" />}
-          {doneBusy ? 'Saving...' : isDone ? 'Done' : 'Mark Done'}
+          {doneBusy ? 'Saving...' : isDone ? 'Done' : 'Mark done'}
         </Button>
         )}
         <Button
+          size="sm"
           variant="ghost"
           onClick={() => void handleDeleteOrder()}
           disabled={deleteBusy}
-          className="rounded-full px-3 py-1.5 text-xs text-rose-600 hover:bg-rose-50 hover:text-rose-700"
+          className="border border-overdue/25 bg-overdue/10 text-overdue hover:bg-overdue/15 hover:text-overdue"
         >
           <Trash2 className="h-3.5 w-3.5" />
-          {deleteBusy ? 'Deleting...' : orderPieceCount > 1 ? 'Delete Order' : 'Delete'}
+          {deleteBusy ? 'Deleting...' : orderPieceCount > 1 ? 'Delete order' : 'Delete'}
         </Button>
       </div>
 
       {deleteError && (
-        <p className="mt-2 rounded-lg bg-rose-50 px-2 py-1 text-xs text-rose-600">{deleteError}</p>
+        <p className="mx-4 mb-3 rounded-lg bg-rose-50 px-2 py-1 text-xs text-rose-600">{deleteError}</p>
       )}
 
       {doneError && (
-        <p className="mt-2 rounded-lg bg-rose-50 px-2 py-1 text-xs text-rose-600">{doneError}</p>
+        <p className="mx-4 mb-3 rounded-lg bg-rose-50 px-2 py-1 text-xs text-rose-600">{doneError}</p>
       )}
 
       {assignOpen && (
-        <div className="mt-3 space-y-3 rounded-xl border border-slate-200 bg-slate-50/70 p-3">
+        <div className="mx-4 mb-4 rounded-xl border border-seam bg-white p-3 sm:p-4">
           {assignError && (
-            <p className="rounded-lg bg-rose-50 px-2 py-1 text-xs text-rose-600">{assignError}</p>
+            <p className="mb-3 rounded-lg bg-rose-50 px-2 py-1 text-xs text-rose-600">{assignError}</p>
           )}
-          {orderCloths.map((piece) => (
-            <div
-              key={piece.id}
-              className="space-y-2 border-b border-slate-200 pb-3 last:border-b-0 last:pb-0"
-            >
-              {orderPieceCount > 1 && (
-                <p className="text-xs font-semibold text-slate-700">
-                  {clothBillName(piece)}
-                  <span className="ml-1.5 font-mono font-medium text-indigo-600">{piece.code}</span>
-                </p>
-              )}
-              <Select
-                label="Cutter"
-                value={piece.cutterId ?? ''}
-                disabled={assigning || cutters.length === 0}
-                onChange={(e) => void handleAssignCutter(piece, e.target.value)}
+          <div className="mb-3 flex items-baseline justify-between gap-3">
+            <p className="text-sm font-semibold text-ink">Assign staff</p>
+            {orderPieceCount > 1 ? (
+              <p className="text-xs text-ink-muted">{orderPieceCount} clothes</p>
+            ) : null}
+          </div>
+          {orderPieceCount > 1 && (
+            <div className="mb-4 grid grid-cols-2 gap-3 rounded-xl bg-paper/80 p-3">
+              <CompactStaffSelect
+                label="Cutter for all"
+                value="__skip"
+                disabled={cutters.length === 0}
+                onChange={(value) => {
+                  if (value === '__skip') return;
+                  void handleAssignAll('cutter', value === '__none' ? '' : value);
+                }}
               >
-                <option value="">No cutter</option>
+                <option value="__skip">Choose…</option>
+                <option value="__none">None</option>
                 {cutters.map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.name}
                   </option>
                 ))}
-              </Select>
-              <Select
-                label="Tailor"
-                value={piece.tailorId ?? ''}
-                disabled={assigning || tailors.length === 0}
-                onChange={(e) => void handleAssignTailor(piece, e.target.value)}
+              </CompactStaffSelect>
+              <CompactStaffSelect
+                label="Tailor for all"
+                value="__skip"
+                disabled={tailors.length === 0}
+                onChange={(value) => {
+                  if (value === '__skip') return;
+                  void handleAssignAll('tailor', value === '__none' ? '' : value);
+                }}
               >
-                <option value="">No tailor</option>
+                <option value="__skip">Choose…</option>
+                <option value="__none">None</option>
                 {tailors.map((t) => (
                   <option key={t.id} value={t.id}>
                     {t.name}
                   </option>
                 ))}
-              </Select>
-              {extraStaffTypes.map((role) => {
-                const members = staff.filter((member) => member.type === role.slug);
-                if (members.length === 0) return null;
-                const current =
-                  (piece.staffJobs ?? []).find((job) => job.type === role.slug)?.staffId ?? '';
-                return (
-                  <Select
-                    key={role.slug}
-                    label={role.label}
-                    value={current}
-                    disabled={assigning}
-                    onChange={(e) => void handleAssignExtra(piece, role.slug, e.target.value)}
-                  >
-                    <option value="">No {staffTypeLabel(role.slug).toLowerCase()}</option>
-                    {members.map((member) => (
-                      <option key={member.id} value={member.id}>
-                        {member.name}
-                      </option>
-                    ))}
-                  </Select>
-                );
-              })}
+              </CompactStaffSelect>
             </div>
-          ))}
-          <p className="text-[10px] text-slate-500">
-            Each cloth has its own cutter and tailor. Scan that cloth&apos;s staff ticket to mark it complete.
-          </p>
+          )}
+          <div className="divide-y divide-seam">
+            {orderCloths.map((piece) => (
+              <div
+                key={piece.id}
+                className={orderPieceCount > 1 ? 'grid gap-3 py-3 first:pt-0 last:pb-0 sm:grid-cols-[minmax(7rem,0.9fr)_1fr_1fr] sm:items-end' : 'grid grid-cols-2 gap-3'}
+              >
+                {orderPieceCount > 1 && (
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-ink">{clothBillName(piece)}</p>
+                    <p className="font-mono text-xs text-ink-muted">{piece.code}</p>
+                  </div>
+                )}
+                <CompactStaffSelect
+                  label="Cutter"
+                  value={cutterValue(piece)}
+                  disabled={cutters.length === 0}
+                  onChange={(value) => void handleAssignCutter(piece, value)}
+                >
+                  <option value="">None</option>
+                  {cutters.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </CompactStaffSelect>
+                <CompactStaffSelect
+                  label="Tailor"
+                  value={tailorValue(piece)}
+                  disabled={tailors.length === 0}
+                  onChange={(value) => void handleAssignTailor(piece, value)}
+                >
+                  <option value="">None</option>
+                  {tailors.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name}
+                    </option>
+                  ))}
+                </CompactStaffSelect>
+                {extraStaffTypes.map((role) => {
+                  const members = staff.filter((member) => member.type === role.slug);
+                  if (members.length === 0) return null;
+                  return (
+                    <div key={role.slug} className={orderPieceCount > 1 ? 'sm:col-span-3' : 'col-span-2'}>
+                      <CompactStaffSelect
+                        label={role.label}
+                        value={extraValue(piece, role.slug)}
+                        onChange={(value) => void handleAssignExtra(piece, role.slug, value)}
+                      >
+                        <option value="">None</option>
+                        {members.map((member) => (
+                          <option key={member.id} value={member.id}>
+                            {member.name}
+                          </option>
+                        ))}
+                      </CompactStaffSelect>
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </Card>
@@ -443,8 +665,10 @@ function ClothListItem({
 }
 
 export function OrdersPage() {
+  const { board: boardParam } = useParams();
+  const board = parseOrderBoard(boardParam);
+
   const {
-    cloths,
     allCloths,
     staff,
     loading,
@@ -454,10 +678,6 @@ export function OrdersPage() {
     search,
     setSearch,
     statusCounts,
-    total,
-    hasMore,
-    listLoading,
-    loadMore,
     refreshList,
   } = useClothList();
 
@@ -476,31 +696,52 @@ export function OrdersPage() {
   const cutters = staff.filter((member) => member.type === 'cutter');
   const tailors = staff.filter((member) => member.type === 'tailor');
   const hasStaff = staff.length > 0;
-  const knownCustomers = useMemo(() => listKnownCustomers(allCloths), [allCloths]);
+  const orderCodeMap = useMemo(() => resolveOrderCodeMap(allCloths), [allCloths]);
+  const boardOrders = useMemo(() => {
+    if (!board) return [];
+    return getOrderRepresentatives(allCloths, allCloths).filter((rep) => {
+      const order = getCustomerOrderCloths(rep, allCloths);
+      if (!orderMatchesBoard(order, board)) return false;
+      if (board === 'all' && statusFilter !== 'all' && !order.some((piece) => piece.status === statusFilter)) {
+        return false;
+      }
+      if (!search.trim()) return true;
+      return order.some((piece) => clothMatchesSearch(piece, search));
+    });
+  }, [allCloths, board, search, statusFilter]);
   const phoneSuggestions = useMemo(
     () => suggestCustomersByPhone(allCloths, form.customerPhone),
     [allCloths, form.customerPhone],
   );
-  const matchedCustomer =
-    findCustomerByPhone(allCloths, form.customerPhone) ??
-    findKnownCustomer(allCloths, form.customerName);
+  const familyOnPhone = useMemo(
+    () => listCustomersByPhone(allCloths, form.customerPhone),
+    [allCloths, form.customerPhone],
+  );
+  const matchedCustomer = findCustomerOnPhone(allCloths, form.customerName, form.customerPhone);
 
   function applyCustomerDetails(name: string, phone = form.customerPhone) {
-    const known = findKnownCustomer(allCloths, name);
-    const nextPhone = phone.trim() || known?.phone || '';
+    const nextPhone = phone;
+    const nextName = name;
     setForm((current) => ({
       ...current,
-      customerName: name,
+      customerName: nextName,
       customerPhone: nextPhone,
       items: current.items.map((item) => {
-        if (!item.sizing.garmentType) return item;
+        if (!item.sizing.garmentType) {
+          return item;
+        }
         const remembered = latestSizingForCustomer(
           allCloths,
-          name,
+          nextName,
           nextPhone,
           item.sizing.garmentType,
         );
-        if (!remembered) return item;
+        if (!remembered) {
+          return {
+            ...item,
+            sizing: { ...item.sizing, measurements: {} },
+          };
+        }
         return {
           ...item,
           sizing: {
@@ -511,6 +752,11 @@ export function OrdersPage() {
         };
       }),
     }));
+  }
+
+  function startNewFamilyMember() {
+    applyCustomerDetails('', form.customerPhone);
+    setPhoneSuggestOpen(false);
   }
 
   async function handleSubmit(event: FormEvent) {
@@ -574,7 +820,7 @@ export function OrdersPage() {
             size: sizeSummary,
             measurements: item.sizing.measurements,
             inGroup: item.sizing.inGroup,
-            notes: form.notes,
+            notes: item.notes.trim() || form.notes,
             cutterId: item.cutterId.trim() || null,
             tailorId: item.tailorId.trim() || null,
             cutterPayAmount: item.cutterId.trim()
@@ -648,8 +894,16 @@ export function OrdersPage() {
   }
 
   const manageClothLive = manageCloth
-    ? cloths.find((c) => c.id === manageCloth.id) ?? manageCloth
+    ? allCloths.find((c) => c.id === manageCloth.id) ?? manageCloth
     : null;
+
+  if (!board) {
+    return <Navigate to="/orders/all" replace />;
+  }
+
+  const canRegister = board === 'all' || board === 'pending';
+
+  const copy = BOARD_COPY[board];
 
   if (loading) {
     return (
@@ -662,16 +916,15 @@ export function OrdersPage() {
   return (
     <div className="flex min-h-full flex-col p-4 pb-6 sm:p-5">
       <PageHeader
-        title="Cloths"
-        subtitle="Search, filter, and manage orders"
+        title={copy.title}
+        subtitle={copy.subtitle}
         action={
-          <Button
-            onClick={() => setOpen(true)}
-            className="shrink-0 rounded-full px-4"
-          >
-            <Plus className="h-4 w-4" />
-            Register
-          </Button>
+          canRegister ? (
+            <Button onClick={() => setOpen(true)} className="shrink-0 px-4">
+              <Plus className="h-4 w-4" />
+              New order
+            </Button>
+          ) : undefined
         }
       />
 
@@ -681,19 +934,19 @@ export function OrdersPage() {
         </Card>
       )}
 
-      {!hasStaff && (
+      {canRegister && !hasStaff && (
         <Card className="mb-4 border-sky-200 bg-sky-50 text-sm text-sky-800">
           No staff added yet — you can still register cloth and apply a customer discount. Assign cutter/tailor later from Staff or Scanner.
         </Card>
       )}
 
-      {hasStaff && cutters.length === 0 && (
+      {canRegister && hasStaff && cutters.length === 0 && (
         <Card className="mb-4 border-amber-200 bg-amber-50 text-sm text-amber-800">
           Add a <strong>Cloth Cutter</strong> in Staff to assign cutting work, or register without a cutter for now.
         </Card>
       )}
 
-      {hasStaff && tailors.length === 0 && (
+      {canRegister && hasStaff && tailors.length === 0 && (
         <Card className="mb-4 border-violet-200 bg-violet-50 text-sm text-violet-800">
           Add at least one <strong>Tailor</strong> in Staff to assign sewing work.
         </Card>
@@ -705,78 +958,78 @@ export function OrdersPage() {
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search code, customer, garment, size..."
+            placeholder="Search order number, name, or mobile"
             data-allow-typing
-            className="w-full rounded-2xl border border-slate-200 bg-slate-50/80 py-3 pl-10 pr-4 text-sm text-slate-900 outline-none transition focus:border-indigo-300 focus:bg-white focus:ring-2 focus:ring-indigo-100"
+            className="w-full rounded-[10px] border border-seam bg-paper py-3 pl-10 pr-4 text-sm text-ink outline-none transition focus:border-brass focus:bg-ticket focus:ring-2 focus:ring-brass/25"
           />
         </label>
 
-        <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">
-          {CLOTH_FILTER_OPTIONS.map((option) => {
-            const active = statusFilter === option.id;
-            const count = countForFilter(option.id, statusCounts);
-            return (
-              <button
-                key={option.id}
-                type="button"
-                onClick={() => setStatusFilter(option.id)}
-                className={`flex min-h-11 flex-col items-center justify-center gap-0.5 rounded-xl border px-1.5 py-2 text-center transition active:scale-[0.98] ${
-                  active
-                    ? option.activeClass
-                    : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
-                }`}
-              >
-                <span className="text-[11px] font-semibold leading-tight">{option.label}</span>
-                <span
-                  className={`min-w-[1.35rem] rounded-md px-1.5 py-0.5 text-[10px] font-bold leading-none ${
-                    active ? option.countClass : 'bg-slate-100 text-slate-500'
+        {board === 'all' ? (
+          <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">
+            {CLOTH_FILTER_OPTIONS.map((option) => {
+              const active = statusFilter === option.id;
+              const count = countForFilter(option.id, statusCounts);
+              return (
+                <button
+                  key={option.id}
+                  type="button"
+                  onClick={() => setStatusFilter(option.id)}
+                  className={`flex min-h-11 flex-col items-center justify-center gap-0.5 rounded-xl border px-1.5 py-2 text-center transition active:scale-[0.98] ${
+                    active
+                      ? option.activeClass
+                      : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
                   }`}
                 >
-                  {count}
-                </span>
-              </button>
-            );
-          })}
-        </div>
+                  <span className="text-[11px] font-semibold leading-tight">{option.label}</span>
+                  <span
+                    className={`min-w-[1.35rem] rounded-md px-1.5 py-0.5 text-[10px] font-bold leading-none ${
+                      active ? option.countClass : 'bg-slate-100 text-slate-500'
+                    }`}
+                  >
+                    {count}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
 
         <div className="flex items-center justify-between gap-2 border-t border-slate-100 pt-2.5">
           <p className="text-xs font-medium text-slate-500">
-            Showing {cloths.length} of {total}
+            {boardOrders.length} order{boardOrders.length === 1 ? '' : 's'}
           </p>
-          {(search || statusFilter !== 'all') && (
+          {search || (board === 'all' && statusFilter !== 'all') ? (
             <button
               type="button"
               onClick={() => {
                 setSearch('');
                 setStatusFilter('all');
               }}
-              className="text-xs font-semibold text-indigo-600 active:opacity-70"
+              className="text-xs font-semibold text-action active:opacity-70"
             >
-              Clear filters
+              {board === 'all' && statusFilter !== 'all' ? 'Clear filters' : 'Clear search'}
             </button>
-          )}
+          ) : null}
         </div>
       </Card>
 
-      {cloths.length === 0 ? (
+      {boardOrders.length === 0 ? (
         <Card className="py-10 text-center">
-          <p className="font-medium text-slate-700">
-            {statusCounts.total === 0 ? 'No cloths yet' : 'No cloths match this filter'}
-          </p>
+          <p className="font-medium text-slate-700">{search ? 'No orders match this search' : copy.empty}</p>
           <p className="mt-1 text-sm text-slate-500">
-            {statusCounts.total === 0
-              ? 'Register a cloth to start the workflow'
-              : 'Try another filter or clear your search'}
+            {search ? 'Try another name, mobile, or order number' : copy.emptyHint}
           </p>
         </Card>
       ) : (
         <div className="space-y-3">
-          {getOrderRepresentatives(cloths, allCloths).map((cloth) => (
+          {boardOrders.map((cloth) => (
             <ClothListItem
               key={getCustomerOrderCloths(cloth, allCloths)[0]?.id ?? cloth.id}
               cloth={cloth}
               staff={staff}
               allCloths={allCloths}
+              orderCode={orderCodeMap.get(customerOrderKey(cloth)) ?? cloth.orderCode ?? cloth.code}
+              showCall={board === 'payments'}
               onReprint={setPrintOrderCloths}
               onPrintBill={setBillCloths}
               onManage={setManageCloth}
@@ -787,38 +1040,32 @@ export function OrdersPage() {
         </div>
       )}
 
-      {hasMore && (
-        <Button
-          variant="secondary"
-          disabled={listLoading}
-          onClick={() => void loadMore()}
-          className="mt-4 w-full rounded-full py-3"
-        >
-          {listLoading ? 'Loading...' : `Load more (${cloths.length} / ${total})`}
-        </Button>
-      )}
-
       <Modal open={open} title="Register Cloth" size="wide" onClose={() => setOpen(false)}>
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form
+          onSubmit={handleSubmit}
+          onKeyDown={(event) => {
+            if (event.key !== 'Enter' && event.key !== 'NumpadEnter') return;
+            const target = event.target;
+            if (target instanceof HTMLTextAreaElement) return;
+            if (target instanceof HTMLButtonElement && target.type === 'submit') return;
+            event.preventDefault();
+          }}
+          className="space-y-4"
+        >
           <div className="grid gap-3 sm:grid-cols-2">
             <Input
               label="Customer Name"
               value={form.customerName}
               onChange={(e) => {
                 const name = e.target.value;
-                const known = findKnownCustomer(allCloths, name);
-                if (known) {
-                  applyCustomerDetails(known.name, known.phone || form.customerPhone);
+                const member = findCustomerOnPhone(allCloths, name, form.customerPhone);
+                if (member) {
+                  applyCustomerDetails(member.name, member.phone);
                   return;
                 }
                 setForm({ ...form, customerName: name });
               }}
-              onBlur={(e) => {
-                const known = findKnownCustomer(allCloths, e.target.value);
-                if (known) applyCustomerDetails(known.name, known.phone || form.customerPhone);
-              }}
-              list="known-customers"
-              placeholder="Customer name"
+              placeholder="Person's name"
               autoComplete="off"
               required
             />
@@ -832,10 +1079,20 @@ export function OrdersPage() {
                 onChange={(e) => {
                   const phone = e.target.value;
                   setPhoneSuggestOpen(true);
-                  const known = findCustomerByPhone(allCloths, phone);
-                  if (known) {
-                    applyCustomerDetails(known.name, known.phone);
+                  const members = listCustomersByPhone(allCloths, phone);
+                  if (members.length === 1 && members[0]) {
+                    applyCustomerDetails(members[0].name, members[0].phone);
                     return;
+                  }
+                  if (members.length > 1) {
+                    const typed = members.find(
+                      (member) =>
+                        member.name.trim().toLowerCase() === form.customerName.trim().toLowerCase(),
+                    );
+                    if (typed) {
+                      applyCustomerDetails(typed.name, typed.phone);
+                      return;
+                    }
                   }
                   setForm({ ...form, customerPhone: phone });
                 }}
@@ -851,7 +1108,7 @@ export function OrdersPage() {
                     <li key={`${customer.phone}-${customer.name}`}>
                       <button
                         type="button"
-                        className="flex w-full flex-col items-start px-3 py-2 text-left hover:bg-indigo-50"
+                        className="flex w-full flex-col items-start px-3 py-2 text-left hover:bg-paper"
                         onMouseDown={(event) => event.preventDefault()}
                         onClick={() => {
                           applyCustomerDetails(customer.name, customer.phone);
@@ -867,36 +1124,70 @@ export function OrdersPage() {
               )}
             </div>
           </div>
-          <datalist id="known-customers">
-            {knownCustomers.map((customer) => (
-              <option key={`${customer.name}-${customer.phone}`} value={customer.name}>
-                {customer.phone ? `${customer.name} · ${customer.phone}` : customer.name}
-              </option>
-            ))}
-          </datalist>
           <p className="-mt-2 text-xs text-slate-500">
-            Type a mobile number to pick an existing customer. A new save always creates a new order —
-            it does not change their previous order.
+            Type a mobile number and pick the person. The same number can have several family members with
+            their own sizes. A new save always creates a new order.
           </p>
+          {familyOnPhone.length > 0 ? (
+            <div className="-mt-1 space-y-2">
+              <p className="text-xs font-medium text-ink-soft">
+                {familyOnPhone.length === 1
+                  ? 'Person on this number'
+                  : `${familyOnPhone.length} people on this number — pick who this order is for`}
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {familyOnPhone.map((member) => {
+                  const selected =
+                    member.name.trim().toLowerCase() === form.customerName.trim().toLowerCase();
+                  return (
+                    <button
+                      key={`${member.phone}-${member.name}`}
+                      type="button"
+                      onClick={() => applyCustomerDetails(member.name, member.phone)}
+                      className={`min-h-11 rounded-full border px-3 text-sm font-semibold transition ${
+                        selected
+                          ? 'border-action bg-action text-white'
+                          : 'border-seam bg-white text-ink hover:bg-paper'
+                      }`}
+                    >
+                      {member.name}
+                    </button>
+                  );
+                })}
+                <button
+                  type="button"
+                  onClick={startNewFamilyMember}
+                  className="min-h-11 rounded-full border border-dashed border-seam bg-white px-3 text-sm font-semibold text-ink-soft hover:border-action hover:text-action"
+                >
+                  Add family member
+                </button>
+              </div>
+            </div>
+          ) : null}
           {matchedCustomer ? (
-            <p className="-mt-2 text-xs font-medium text-indigo-600">
-              Existing customer: {matchedCustomer.name}
+            <p className="-mt-1 text-xs font-medium text-action">
+              Using {matchedCustomer.name}
               {matchedCustomer.phone ? ` · ${matchedCustomer.phone}` : ''}. Select a cloth type to fill
-              last saved sizes, then save to create a new order.
+              this person’s last saved sizes.
+            </p>
+          ) : familyOnPhone.length > 0 && !form.customerName.trim() ? (
+            <p className="-mt-1 text-xs font-medium text-ink-muted">
+              Type a new name for another family member, then enter their sizes.
             </p>
           ) : null}
 
           <div className="space-y-3">
             <div className="flex items-center justify-between gap-2">
               <p className="text-sm font-semibold text-slate-800">Clothes</p>
-              <span className="text-xs font-medium text-indigo-600">
+              <span className="text-xs font-medium text-action">
                 {registerPieceCount} piece{registerPieceCount === 1 ? '' : 's'} total
               </span>
             </div>
 
             {form.items.map((item, index) => {
-              const cutterName = getStaffById(staff, item.cutterId || null)?.name;
-              const tailorName = getStaffById(staff, item.tailorId || null)?.name;
+              const lineQty = parseLineQuantity(item.quantity);
+              const garmentLabel =
+                getGarmentType(item.sizing.garmentType)?.label || 'cloth';
               return (
               <div
                 key={item.id}
@@ -921,7 +1212,7 @@ export function OrdersPage() {
                   )}
                 </div>
 
-                <div className="grid gap-4 xl:grid-cols-2 xl:items-start">
+                <div className="grid gap-4 lg:grid-cols-2 lg:items-start">
                   <GarmentSizingForm
                     layout="wide"
                     value={item.sizing}
@@ -998,6 +1289,8 @@ export function OrdersPage() {
                           <Select
                             label="Cutter"
                             value={item.cutterId}
+                            searchable={false}
+                            placeholder="Assign later"
                             onChange={(e) =>
                               setForm({
                                 ...form,
@@ -1029,24 +1322,27 @@ export function OrdersPage() {
                         )}
                         {item.cutterId ? (
                           <p className="self-end pb-3 text-xs font-medium text-slate-600">
-                            {cutterName ? `${cutterName}: ` : 'Cutter: '}
-                            {formatCurrency(parseAmount(item.cutterPayAmount) || staffRateForGarment(item.sizing.garmentType, 'cutter'))}{' '}
-                            × {parseLineQuantity(item.quantity)} ={' '}
-                            {formatCurrency(
-                              (parseAmount(item.cutterPayAmount) ||
-                                staffRateForGarment(item.sizing.garmentType, 'cutter')) *
-                                parseLineQuantity(item.quantity),
-                            )}
+                            {registerStaffOwedCopy({
+                              assigned: true,
+                              rate:
+                                parseAmount(item.cutterPayAmount) ||
+                                staffRateForGarment(item.sizing.garmentType, 'cutter'),
+                              qty: lineQty,
+                              role: 'cutter',
+                              garmentLabel,
+                            })}
                           </p>
                         ) : cutters.length > 0 ? (
                           <p className="self-end pb-2 text-xs text-slate-400">
-                            Assign cutter to set payout
+                            No payout until you assign
                           </p>
                         ) : null}
                         {tailors.length > 0 ? (
                           <Select
                             label="Tailor"
                             value={item.tailorId}
+                            searchable={false}
+                            placeholder="Assign later"
                             onChange={(e) =>
                               setForm({
                                 ...form,
@@ -1074,18 +1370,19 @@ export function OrdersPage() {
                         ) : null}
                         {item.tailorId ? (
                           <p className="self-end pb-3 text-xs font-medium text-slate-600">
-                            {tailorName ? `${tailorName}: ` : 'Tailor: '}
-                            {formatCurrency(parseAmount(item.tailorPayAmount) || staffRateForGarment(item.sizing.garmentType, 'tailor'))}{' '}
-                            × {parseLineQuantity(item.quantity)} ={' '}
-                            {formatCurrency(
-                              (parseAmount(item.tailorPayAmount) ||
-                                staffRateForGarment(item.sizing.garmentType, 'tailor')) *
-                                parseLineQuantity(item.quantity),
-                            )}
+                            {registerStaffOwedCopy({
+                              assigned: true,
+                              rate:
+                                parseAmount(item.tailorPayAmount) ||
+                                staffRateForGarment(item.sizing.garmentType, 'tailor'),
+                              qty: lineQty,
+                              role: 'tailor',
+                              garmentLabel,
+                            })}
                           </p>
                         ) : tailors.length > 0 ? (
                           <p className="self-end pb-2 text-xs text-slate-400">
-                            Assign tailor to set payout
+                            No payout until you assign
                           </p>
                         ) : null}
                         <Input
@@ -1128,6 +1425,8 @@ export function OrdersPage() {
                               <Select
                                 label={role.label}
                                 value={slot.staffId}
+                                searchable={false}
+                                placeholder="Assign later"
                                 onChange={(e) =>
                                   setForm({
                                     ...form,
@@ -1159,11 +1458,17 @@ export function OrdersPage() {
                               </Select>
                               {slot.staffId ? (
                                 <p className="self-end pb-3 text-xs font-medium text-slate-600">
-                                  {formatCurrency(rate)} × {qty} = {formatCurrency(rate * qty)}
+                                  {registerStaffOwedCopy({
+                                    assigned: true,
+                                    rate,
+                                    qty,
+                                    role: staffTypeLabel(role.slug).toLowerCase(),
+                                    garmentLabel,
+                                  })}
                                 </p>
                               ) : (
                                 <p className="self-end pb-2 text-xs text-slate-400">
-                                  Assign {staffTypeLabel(role.slug).toLowerCase()} to set payout
+                                  No payout until you assign
                                 </p>
                               )}
                             </div>
@@ -1173,6 +1478,19 @@ export function OrdersPage() {
                     )}
                   </div>
                 </div>
+                <Textarea
+                  label="Special note"
+                  value={item.notes}
+                  onChange={(e) =>
+                    setForm({
+                      ...form,
+                      items: form.items.map((row) =>
+                        row.id === item.id ? { ...row, notes: e.target.value } : row,
+                      ),
+                    })
+                  }
+                  placeholder="Instructions for this cloth (prints on the staff ticket)"
+                />
               </div>
               );
             })}
@@ -1205,18 +1523,18 @@ export function OrdersPage() {
             </Button>
 
             <p className="text-xs text-slate-500">
-              Qty 2 of the same cloth prints as one staff ticket. Different cloths or staff still print
-              separately. Customer payment is split evenly across pieces.
+              Qty 2 of the same cloth prints as one staff ticket. Different cloths, staff, or special
+              notes still print separately. Customer payment is split evenly across pieces.
             </p>
           </div>
 
           <Textarea
-            label="Notes"
+            label="Order note"
             value={form.notes}
             onChange={(e) => setForm({ ...form, notes: e.target.value })}
-            placeholder="Any special instructions"
+            placeholder="Used on every cloth that has no special note of its own"
           />
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
             <Input
               label="Order date"
               type="date"
@@ -1281,11 +1599,12 @@ export function OrdersPage() {
         <ClothManageSheet
           cloth={manageClothLive}
           orderCloths={getCustomerOrderCloths(manageClothLive, allCloths)}
+          allCloths={allCloths}
           staff={staff}
           onClose={() => setManageCloth(null)}
           onUpdated={handleUpdated}
           onShowBarcode={() => {
-            setPrintOrderCloths([manageClothLive]);
+            setPrintOrderCloths(getCustomerOrderCloths(manageClothLive, allCloths));
             setManageCloth(null);
           }}
         />

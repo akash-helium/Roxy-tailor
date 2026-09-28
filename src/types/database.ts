@@ -101,6 +101,7 @@ export interface Database {
           cutter_expected_date: string | null;
           tailor_expected_date: string | null;
           expected_date?: string | null;
+          order_code?: string;
           created_at: string;
           updated_at: string;
           staff_jobs?: Json;
@@ -139,6 +140,7 @@ export interface Database {
           cutter_expected_date?: string | null;
           tailor_expected_date?: string | null;
           expected_date?: string | null;
+          order_code?: string;
           created_at?: string;
           updated_at?: string;
           staff_jobs?: Json;
@@ -177,6 +179,7 @@ export interface Database {
           cutter_expected_date?: string | null;
           tailor_expected_date?: string | null;
           expected_date?: string | null;
+          order_code?: string;
           created_at?: string;
           updated_at?: string;
           staff_jobs?: Json;

@@ -31,4 +31,5 @@ android/keystore.properties
 android/*.keystore
 android/*.jks
 release/
+.ota/
 .vercel

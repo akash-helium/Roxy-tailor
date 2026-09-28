@@ -25,11 +25,13 @@ export function canPrintThermal() {
 
 export async function printThermalTicket(input: {
   title?: string;
+  headerLines?: string[];
   lines: string[];
   barcodeValue: string;
   footer?: string;
   headerImageUrl?: string;
   copies?: number;
+  barcodePlacement?: 'middle' | 'end';
 }): Promise<ThermalPrintResult> {
   const api = desktopApi();
   if (!api?.printRaw) {
@@ -58,11 +60,13 @@ export async function printThermalTicket(input: {
     payloads.push(
       buildEscPosTicket({
         title: input.title ?? APP_NAME,
+        headerLines: input.headerLines,
         lines: input.lines,
         barcodeValue: input.barcodeValue,
         raster,
         headerRaster,
         footer: input.footer,
+        barcodePlacement: input.barcodePlacement,
       }),
     );
   }

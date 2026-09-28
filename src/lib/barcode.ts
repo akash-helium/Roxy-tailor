@@ -128,6 +128,8 @@ export function barcodeLookupCandidates(code: string) {
   const hyphenated =
     compact.startsWith('CL') && compact.length > 2 && !normalized.includes('-')
       ? `CL-${compact.slice(2)}`
-      : normalized;
+      : compact.startsWith('OR') && compact.length > 2 && !normalized.includes('-')
+        ? `OR-${compact.slice(2)}`
+        : normalized;
   return [...new Set([normalized, compact, hyphenated].filter(Boolean))];
 }

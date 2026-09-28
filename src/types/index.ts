@@ -64,6 +64,7 @@ export interface Cloth {
   measurements: Record<string, string>;
   inGroup: boolean;
   orderBatchId: string;
+  orderCode: string;
   staffJobs: ClothStaffJob[];
   notes: string;
   status: ClothStatus;
@@ -103,9 +104,9 @@ export const STAFF_TYPE_LABELS: Record<string, string> = {
 };
 
 export function staffTypeBadgeClass(slug: string) {
-  if (slug === 'cutter') return 'bg-amber-100 text-amber-800 border-amber-200';
-  if (slug === 'tailor') return 'bg-violet-100 text-violet-800 border-violet-200';
-  return 'bg-slate-100 text-slate-700 border-slate-200';
+  if (slug === 'cutter') return 'border-cut/25 bg-cut/10 text-cut';
+  if (slug === 'tailor') return 'border-sew/25 bg-sew/10 text-sew';
+  return 'border-seam bg-paper text-ink-soft';
 }
 
 export const CLOTH_STATUS_LABELS: Record<ClothStatus, string> = {
@@ -116,8 +117,8 @@ export const CLOTH_STATUS_LABELS: Record<ClothStatus, string> = {
 };
 
 export const CLOTH_STATUS_COLORS: Record<ClothStatus, string> = {
-  cutting: 'bg-amber-100 text-amber-800 border-amber-200',
-  ready_to_sew: 'bg-sky-100 text-sky-800 border-sky-200',
-  sewing: 'bg-violet-100 text-violet-800 border-violet-200',
-  completed: 'bg-emerald-100 text-emerald-800 border-emerald-200',
+  cutting: 'border-cut/25 bg-cut/10 text-cut',
+  ready_to_sew: 'border-ready/25 bg-ready/10 text-ready',
+  sewing: 'border-sew/25 bg-sew/10 text-sew',
+  completed: 'border-done/25 bg-done/10 text-done',
 };

@@ -105,17 +105,30 @@ export function useHardwareScanner({ enabled = true, onScan }: Options) {
       }
 
       if (isScanTerminatorKey(event.key)) {
-        if (bufferRef.current) {
-          emitScan(bufferRef.current, event);
+        const typing = isTypingField(event.target);
+        const typedValue =
+          event.target instanceof HTMLInputElement ? event.target.value.trim() : '';
+        const payload = bufferRef.current || typedValue;
+        const fromGun = rapidBurst && looksLikeScanPayload(payload);
+
+        if (typing && !fromGun) {
+          resetBuffer();
+          if (
+            (event.key === 'Enter' || event.key === 'NumpadEnter' || event.key === 'Return') &&
+            event.target instanceof HTMLInputElement &&
+            event.target.dataset.scannerInput === undefined
+          ) {
+            event.preventDefault();
+          }
           return;
         }
-        if (event.target instanceof HTMLInputElement && event.target.value.trim()) {
-          const typed = event.target.value;
-          if (rapidBurst || looksLikeScanPayload(typed)) {
-            emitScan(typed, event);
-            clearInputElement(event.target);
-          }
+
+        if (payload && (fromGun || looksLikeScanPayload(payload))) {
+          emitScan(payload, event);
+          return;
         }
+
+        resetBuffer();
         return;
       }
 

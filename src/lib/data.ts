@@ -82,6 +82,7 @@ export async function registerCloth(input: {
   tailorPayAmount?: number;
   code?: string;
   orderBatchId?: string;
+  orderCode?: string;
   staffJobs?: ClothStaffJob[];
 }) {
   const created = await registerClothOrder([input]);
@@ -113,6 +114,7 @@ export async function registerClothOrder(
     tailorPayAmount?: number;
     code?: string;
     orderBatchId?: string;
+    orderCode?: string;
     staffJobs?: import("../types").ClothStaffJob[];
   }[],
 ) {
@@ -161,6 +163,7 @@ export async function adjustClothQuantity(
     cutterPayAmount: cloth.cutterPayAmount,
     tailorPayAmount: cloth.tailorPayAmount,
     orderBatchId: cloth.orderBatchId || undefined,
+    orderCode: cloth.orderCode || undefined,
     staffJobs: cloth.staffJobs ?? [],
   };
 
@@ -189,6 +192,13 @@ export async function updateClothSize(id: string, size: string) {
   return mode === "local"
     ? local.updateClothSizeLocal(id, size)
     : remote.updateClothSize(id, size);
+}
+
+export async function updateClothNotes(id: string, notes: string) {
+  const mode = await resolveWriteStorageMode();
+  return mode === "local"
+    ? local.updateClothNotesLocal(id, notes)
+    : remote.updateClothNotes(id, notes);
 }
 
 export async function updateClothPayments(
@@ -252,6 +262,18 @@ export async function getClothByCode(code: string) {
     if (cloth) return cloth;
   }
   return null;
+}
+
+export async function listClothsByOrderCode(code: string) {
+  const mode = await resolveReadStorageMode();
+  for (const candidate of barcodeLookupCandidates(code)) {
+    const rows =
+      mode === "local"
+        ? local.listClothsByOrderCodeLocal(candidate)
+        : await remote.listClothsByOrderCode(candidate);
+    if (rows.length > 0) return rows;
+  }
+  return [];
 }
 
 export async function markCuttingComplete(id: string) {

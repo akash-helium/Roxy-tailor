@@ -5,6 +5,7 @@ const os = require('node:os');
 const net = require('node:net');
 const { spawn } = require('node:child_process');
 const { loadEnvFiles, sendWhatsAppFromPayload } = require('./lib/whatsapp-cloud.cjs');
+const ota = require('./lib/electron-ota.cjs');
 
 const isDev = !app.isPackaged;
 const devPort = process.env.DESKTOP_DEV_PORT || '5180';
@@ -15,7 +16,7 @@ if (process.platform === 'win32') {
 }
 
 function resolveIndexHtml() {
-  return path.join(app.getAppPath(), 'dist', 'index.html');
+  return ota.resolveIndexHtml();
 }
 
 function resolveWindowIcon() {
@@ -26,6 +27,10 @@ function resolveWindowIcon() {
     path.join(process.resourcesPath, 'icon.png'),
   ];
   return candidates.find((file) => fs.existsSync(file));
+}
+
+function isSafeExternalUrl(url) {
+  return /^https:\/\//i.test(url);
 }
 
 function createWindow() {
@@ -51,8 +56,21 @@ function createWindow() {
   });
 
   win.webContents.setWindowOpenHandler(({ url }) => {
-    void shell.openExternal(url);
+    if (isSafeExternalUrl(url)) {
+      void shell.openExternal(url);
+    }
     return { action: 'deny' };
+  });
+
+  win.webContents.on('will-navigate', (event, url) => {
+    if (url.startsWith('file:')) return;
+    if (url.startsWith('http://127.0.0.1:') || url.startsWith('http://localhost:') || url.startsWith(devUrl)) {
+      return;
+    }
+    event.preventDefault();
+    if (isSafeExternalUrl(url)) {
+      void shell.openExternal(url);
+    }
   });
 
   win.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
@@ -255,8 +273,24 @@ ipcMain.handle('send-whatsapp', async (_event, payload) => {
   return sendWhatsAppFromPayload(payload);
 });
 
+ipcMain.handle('ota-status', () => ota.getStatus());
+ipcMain.handle('ota-notify-ready', () => ota.getStatus());
+ipcMain.handle('ota-relaunch', () => {
+  ota.relaunch();
+});
+
 app.whenReady().then(() => {
   createWindow();
+  void ota.checkForUpdate()
+    .then((status) => {
+      if (!status.ready) return;
+      for (const win of BrowserWindow.getAllWindows()) {
+        win.webContents.send('ota-ready', { version: status.available, notes: status.notes });
+      }
+    })
+    .catch((error) => {
+      console.error('OTA check failed', error);
+    });
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

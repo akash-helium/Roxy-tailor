@@ -2,7 +2,14 @@ import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useAdminAppData } from '@/hooks/useAdminAppData';
 import { buildCustomerSummaries, buildStaffDetails } from '@/lib/admin-data';
-import { clothPartPaymentTotal, clothPendingAmount, formatCurrency, getStaffPayFields, staffPayPending } from '@app/lib/payments';
+import {
+  clothPaidAmount,
+  clothPendingAmount,
+  formatCurrency,
+  getStaffPayFields,
+  staffPayPending,
+} from '@app/lib/payments';
+import { clothBillName } from '@app/lib/utils';
 import { useStaffTypes } from '@app/contexts/StaffTypesContext';
 import { CLOTH_STATUS_COLORS, CLOTH_STATUS_LABELS } from '@app/types';
 import { Badge, Card } from '@app/components/ui';
@@ -20,7 +27,7 @@ import {
   SummaryCard,
   SummaryGrid,
 } from '@/components/AdminUi';
-import { formatDate, formatDateTime } from '@/lib/format';
+import { formatDate } from '@/lib/format';
 import { cn } from '@app/lib/utils';
 
 type TransactionView = 'customers' | 'staff';
@@ -44,7 +51,7 @@ function ViewTabs({
         className={cn(
           'flex-1 rounded-md px-3 py-2.5 text-center text-sm font-semibold transition sm:px-4',
           view === 'customers'
-            ? 'bg-indigo-600 text-white shadow-sm'
+            ? 'bg-tab text-white'
             : 'text-slate-600 hover:bg-slate-50',
         )}
       >
@@ -57,7 +64,7 @@ function ViewTabs({
         className={cn(
           'flex-1 rounded-md px-3 py-2.5 text-center text-sm font-semibold transition sm:px-4',
           view === 'staff'
-            ? 'bg-indigo-600 text-white shadow-sm'
+            ? 'bg-tab text-white'
             : 'text-slate-600 hover:bg-slate-50',
         )}
       >
@@ -138,7 +145,7 @@ function CustomerTransactionsPanel({
           <>
             <DetailPanelHeader
               title={selected.name}
-              subtitle="Customer payment history — advance, part, and final payments per order"
+              subtitle="Bills and payments per piece"
             />
             <DetailPanelBody>
               <SummaryGrid>
@@ -152,56 +159,54 @@ function CustomerTransactionsPanel({
                 <SummaryCard label="Orders" value={String(selected.orderCount)} />
               </SummaryGrid>
 
-              <div className="overflow-x-auto rounded-xl border border-slate-200">
-                <table className="min-w-full divide-y divide-slate-200 text-sm">
-                  <thead className="bg-slate-50">
+              <div className="overflow-x-auto rounded-xl border border-seam">
+                <table className="min-w-full divide-y divide-seam text-sm">
+                  <thead className="bg-paper">
                     <tr>
-                      <th className="px-4 py-3 text-left text-xs font-semibold uppercase text-slate-500">Date</th>
-                      <th className="px-4 py-3 text-left text-xs font-semibold uppercase text-slate-500">Code</th>
-                      <th className="px-4 py-3 text-left text-xs font-semibold uppercase text-slate-500">Garment</th>
-                      <th className="px-4 py-3 text-left text-xs font-semibold uppercase text-slate-500">Status</th>
-                      <th className="px-4 py-3 text-right text-xs font-semibold uppercase text-slate-500">Bill</th>
-                      <th className="px-4 py-3 text-right text-xs font-semibold uppercase text-slate-500">Advance</th>
-                      <th className="px-4 py-3 text-right text-xs font-semibold uppercase text-slate-500">Part</th>
-                      <th className="px-4 py-3 text-right text-xs font-semibold uppercase text-slate-500">Final</th>
-                      <th className="px-4 py-3 text-right text-xs font-semibold uppercase text-slate-500">Pending</th>
+                      <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-ink-muted">
+                        Piece
+                      </th>
+                      <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-ink-muted">
+                        Status
+                      </th>
+                      <th className="px-3 py-2 text-right text-[11px] font-semibold uppercase tracking-wide text-ink-muted">
+                        Bill
+                      </th>
+                      <th className="px-3 py-2 text-right text-[11px] font-semibold uppercase tracking-wide text-ink-muted">
+                        Paid
+                      </th>
+                      <th className="px-3 py-2 text-right text-[11px] font-semibold uppercase tracking-wide text-ink-muted">
+                        Pending
+                      </th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-100 bg-white">
+                  <tbody className="divide-y divide-seam bg-white">
                     {selected.cloths.map((cloth) => {
                       const pending = clothPendingAmount(cloth);
+                      const paid = clothPaidAmount(cloth);
                       const status = cloth.status in CLOTH_STATUS_LABELS ? cloth.status : 'cutting';
                       return (
-                        <tr key={cloth.id} className="hover:bg-slate-50/80">
-                          <td className="whitespace-nowrap px-4 py-3 text-slate-500">
-                            {formatDateTime(cloth.updatedAt)}
+                        <tr key={cloth.id} className="hover:bg-paper/80">
+                          <td className="px-3 py-2.5">
+                            <p className="font-display text-xs font-semibold tracking-wide text-ink">
+                              {cloth.orderCode ? `${cloth.orderCode} · ${cloth.code}` : cloth.code}
+                            </p>
+                            <p className="text-sm text-ink">{clothBillName(cloth)}</p>
+                            <p className="text-[11px] text-ink-muted">{formatDate(cloth.updatedAt)}</p>
                           </td>
-                          <td className="whitespace-nowrap px-4 py-3 font-mono text-xs font-semibold text-indigo-700">
-                            {cloth.code}
-                          </td>
-                          <td className="px-4 py-3 text-slate-700">
-                            <p>{cloth.garment}</p>
-                            <p className="text-xs text-slate-500">{cloth.fabricColor}</p>
-                          </td>
-                          <td className="px-4 py-3">
+                          <td className="px-3 py-2.5">
                             <Badge className={CLOTH_STATUS_COLORS[status]}>
                               {CLOTH_STATUS_LABELS[status]}
                             </Badge>
                           </td>
-                          <td className="whitespace-nowrap px-4 py-3 text-right font-medium">
+                          <td className="whitespace-nowrap px-3 py-2.5 text-right font-semibold tabular-nums">
                             {formatCurrency(cloth.totalAmount)}
                           </td>
-                          <td className="whitespace-nowrap px-4 py-3 text-right text-emerald-700">
-                            {formatCurrency(cloth.advanceAmount)}
-                          </td>
-                          <td className="whitespace-nowrap px-4 py-3 text-right text-emerald-700">
-                            {formatCurrency(clothPartPaymentTotal(cloth))}
-                          </td>
-                          <td className="whitespace-nowrap px-4 py-3 text-right text-emerald-700">
-                            {formatCurrency(cloth.finalPaymentAmount)}
+                          <td className="whitespace-nowrap px-3 py-2.5 text-right font-semibold tabular-nums text-done">
+                            {formatCurrency(paid)}
                           </td>
                           <td
-                            className={`whitespace-nowrap px-4 py-3 text-right font-medium ${pending > 0 ? 'text-amber-700' : 'text-slate-500'}`}
+                            className={`whitespace-nowrap px-3 py-2.5 text-right font-semibold tabular-nums ${pending > 0 ? 'text-cut' : 'text-ink-muted'}`}
                           >
                             {formatCurrency(pending)}
                           </td>
@@ -209,26 +214,18 @@ function CustomerTransactionsPanel({
                       );
                     })}
                   </tbody>
-                  <tfoot className="bg-slate-50 font-semibold">
+                  <tfoot className="bg-paper font-semibold">
                     <tr>
-                      <td colSpan={5} className="px-4 py-3 text-slate-700">
-                        Total ({selected.orderCount} orders)
+                      <td colSpan={2} className="px-3 py-2.5 text-ink">
+                        Total ({selected.orderCount})
                       </td>
-                      <td className="px-4 py-3 text-right">{formatCurrency(selected.totalBilled)}</td>
-                      <td className="px-4 py-3 text-right text-emerald-700">
-                        {formatCurrency(selected.cloths.reduce((sum, cloth) => sum + cloth.advanceAmount, 0))}
+                      <td className="px-3 py-2.5 text-right tabular-nums">
+                        {formatCurrency(selected.totalBilled)}
                       </td>
-                      <td className="px-4 py-3 text-right text-emerald-700">
-                        {formatCurrency(
-                          selected.cloths.reduce((sum, cloth) => sum + clothPartPaymentTotal(cloth), 0),
-                        )}
+                      <td className="px-3 py-2.5 text-right tabular-nums text-done">
+                        {formatCurrency(selected.totalPaid)}
                       </td>
-                      <td className="px-4 py-3 text-right text-emerald-700">
-                        {formatCurrency(
-                          selected.cloths.reduce((sum, cloth) => sum + cloth.finalPaymentAmount, 0),
-                        )}
-                      </td>
-                      <td className="px-4 py-3 text-right text-amber-700">
+                      <td className="px-3 py-2.5 text-right tabular-nums text-cut">
                         {formatCurrency(selected.totalPending)}
                       </td>
                     </tr>
@@ -359,50 +356,50 @@ function StaffTransactionsPanel({
                   No cloths assigned to this staff member yet.
                 </Card>
               ) : (
-                <div className="overflow-x-auto rounded-xl border border-slate-200">
-                  <table className="min-w-full divide-y divide-slate-200 text-sm">
-                    <thead className="bg-slate-50">
+                <div className="overflow-x-auto rounded-xl border border-seam">
+                  <table className="min-w-full divide-y divide-seam text-sm">
+                    <thead className="bg-paper">
                       <tr>
-                        <th className="px-4 py-3 text-left text-xs font-semibold uppercase text-slate-500">Date</th>
-                        <th className="px-4 py-3 text-left text-xs font-semibold uppercase text-slate-500">Code</th>
-                        <th className="px-4 py-3 text-left text-xs font-semibold uppercase text-slate-500">Customer</th>
-                        <th className="px-4 py-3 text-left text-xs font-semibold uppercase text-slate-500">Garment</th>
-                        <th className="px-4 py-3 text-right text-xs font-semibold uppercase text-slate-500">Total Pay</th>
-                        <th className="px-4 py-3 text-right text-xs font-semibold uppercase text-slate-500">Advance</th>
-                        <th className="px-4 py-3 text-right text-xs font-semibold uppercase text-slate-500">Final</th>
-                        <th className="px-4 py-3 text-right text-xs font-semibold uppercase text-slate-500">Pending</th>
+                        <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-ink-muted">
+                          Piece
+                        </th>
+                        <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-ink-muted">
+                          Customer
+                        </th>
+                        <th className="px-3 py-2 text-right text-[11px] font-semibold uppercase tracking-wide text-ink-muted">
+                          Pay
+                        </th>
+                        <th className="px-3 py-2 text-right text-[11px] font-semibold uppercase tracking-wide text-ink-muted">
+                          Paid
+                        </th>
+                        <th className="px-3 py-2 text-right text-[11px] font-semibold uppercase tracking-wide text-ink-muted">
+                          Pending
+                        </th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-slate-100 bg-white">
+                    <tbody className="divide-y divide-seam bg-white">
                       {selected.cloths.map((cloth) => {
                         const pay = getStaffPayFields(cloth, payType);
                         const pending = staffPayPending(pay.amount, pay.advance, pay.final);
+                        const paid = pay.advance + pay.final;
                         return (
-                          <tr key={cloth.id} className="hover:bg-slate-50/80">
-                            <td className="whitespace-nowrap px-4 py-3 text-slate-500">
-                              {formatDateTime(cloth.updatedAt)}
+                          <tr key={cloth.id} className="hover:bg-paper/80">
+                            <td className="px-3 py-2.5">
+                              <p className="font-display text-xs font-semibold tracking-wide text-ink">
+                                {cloth.orderCode ? `${cloth.orderCode} · ${cloth.code}` : cloth.code}
+                              </p>
+                              <p className="text-sm text-ink">{clothBillName(cloth)}</p>
+                              <p className="text-[11px] text-ink-muted">{formatDate(cloth.updatedAt)}</p>
                             </td>
-                            <td className="whitespace-nowrap px-4 py-3 font-mono text-xs font-semibold text-indigo-700">
-                              {cloth.code}
-                            </td>
-                            <td className="px-4 py-3 text-slate-700">{cloth.customerName}</td>
-                            <td className="px-4 py-3 text-slate-700">
-                              <p>{cloth.garment}</p>
-                              {pay.remarks?.trim() && (
-                                <p className="text-xs text-slate-500">{pay.remarks}</p>
-                              )}
-                            </td>
-                            <td className="whitespace-nowrap px-4 py-3 text-right font-medium">
+                            <td className="px-3 py-2.5 text-ink">{cloth.customerName}</td>
+                            <td className="whitespace-nowrap px-3 py-2.5 text-right font-semibold tabular-nums">
                               {formatCurrency(pay.amount)}
                             </td>
-                            <td className="whitespace-nowrap px-4 py-3 text-right text-emerald-700">
-                              {formatCurrency(pay.advance)}
-                            </td>
-                            <td className="whitespace-nowrap px-4 py-3 text-right text-emerald-700">
-                              {formatCurrency(pay.final)}
+                            <td className="whitespace-nowrap px-3 py-2.5 text-right font-semibold tabular-nums text-done">
+                              {formatCurrency(paid)}
                             </td>
                             <td
-                              className={`whitespace-nowrap px-4 py-3 text-right font-medium ${pending > 0 ? 'text-amber-700' : 'text-slate-500'}`}
+                              className={`whitespace-nowrap px-3 py-2.5 text-right font-semibold tabular-nums ${pending > 0 ? 'text-cut' : 'text-ink-muted'}`}
                             >
                               {formatCurrency(pending)}
                             </td>
@@ -410,29 +407,18 @@ function StaffTransactionsPanel({
                         );
                       })}
                     </tbody>
-                    <tfoot className="bg-slate-50 font-semibold">
+                    <tfoot className="bg-paper font-semibold">
                       <tr>
-                        <td colSpan={4} className="px-4 py-3 text-slate-700">
-                          Total ({selected.clothCount} cloths)
+                        <td colSpan={2} className="px-3 py-2.5 text-ink">
+                          Total ({selected.clothCount})
                         </td>
-                        <td className="px-4 py-3 text-right">{formatCurrency(selected.totalAmount)}</td>
-                        <td className="px-4 py-3 text-right text-emerald-700">
-                          {formatCurrency(
-                            selected.cloths.reduce(
-                              (sum, cloth) => sum + getStaffPayFields(cloth, payType).advance,
-                              0,
-                            ),
-                          )}
+                        <td className="px-3 py-2.5 text-right tabular-nums">
+                          {formatCurrency(selected.totalAmount)}
                         </td>
-                        <td className="px-4 py-3 text-right text-emerald-700">
-                          {formatCurrency(
-                            selected.cloths.reduce(
-                              (sum, cloth) => sum + getStaffPayFields(cloth, payType).final,
-                              0,
-                            ),
-                          )}
+                        <td className="px-3 py-2.5 text-right tabular-nums text-done">
+                          {formatCurrency(selected.totalPaid)}
                         </td>
-                        <td className="px-4 py-3 text-right text-amber-700">
+                        <td className="px-3 py-2.5 text-right tabular-nums text-cut">
                           {formatCurrency(selected.totalPending)}
                         </td>
                       </tr>

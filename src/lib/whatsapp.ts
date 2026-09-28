@@ -1,6 +1,6 @@
 import { APP_NAME } from './app-config';
 import { isSupabaseConfigured, supabase } from './supabase';
-import { customerBillItemLabel, groupClothsForCustomerBill } from './customer-order';
+import { customerBillItemLabel, groupClothsForCustomerBill, summarizeCustomerOrder } from './customer-order';
 import { formatCalendarDate } from './utils';
 import type { Cloth } from '../types';
 
@@ -34,6 +34,25 @@ export function toWhatsAppNumber(raw: string) {
   return null;
 }
 
+export function customerTelHref(raw: string) {
+  const wa = toWhatsAppNumber(raw);
+  if (wa) return `tel:+${wa}`;
+  const digits = raw.replace(/\D/g, '');
+  if (digits.length < 8) return null;
+  return `tel:+${digits}`;
+}
+
+export function dialCustomerPhone(raw: string) {
+  const href = customerTelHref(raw);
+  if (!href) return false;
+  if (window.tailorDesktop?.openExternal) {
+    void window.tailorDesktop.openExternal(href);
+    return true;
+  }
+  window.location.assign(href);
+  return true;
+}
+
 export function normalizeCustomerPhone(raw: string): { ok: true; phone: string } | { ok: false; error: string } {
   const trimmed = raw.trim();
   if (!trimmed) return { ok: true, phone: '' };
@@ -51,7 +70,8 @@ export function normalizeCustomerPhone(raw: string): { ok: true; phone: string }
 
 export function buildOrderConfirmationMessage(cloths: Cloth[]) {
   const first = cloths[0];
-  const orderNumber = first?.code ?? '—';
+  const summary = summarizeCustomerOrder(cloths);
+  const orderNumber = summary.orderCode || summary.codes[0] || '—';
   const name = first?.customerName?.trim() || 'Customer';
   const items = groupClothsForCustomerBill(cloths).map(customerBillItemLabel).join(', ');
   const pieceLabel = cloths.length === 1 ? '1 piece' : `${cloths.length} pieces`;
@@ -137,7 +157,7 @@ export function buildWhatsAppSendPayload(cloths: Cloth[], phone: string): WhatsA
   return {
     phone: number,
     name: first.customerName?.trim() || 'Customer',
-    orderNumber: first.code || '—',
+    orderNumber: summarizeCustomerOrder(cloths).orderCode || first.code || '—',
     items: groupClothsForCustomerBill(cloths).map(customerBillItemLabel).join(', '),
     message: buildOrderConfirmationMessage(cloths),
   };
@@ -238,6 +258,6 @@ export async function sendOrderConfirmationSilent(
     ok: false,
     status: 'unconfigured',
     message:
-      'WhatsApp Business API is not set up yet. Confirmation cannot be sent without opening WhatsApp.',
+      'WhatsApp is not set up. Add RICHAUTOMATE_API_KEY in .env.local (RichAutomate Settings → API Keys).',
   };
 }
