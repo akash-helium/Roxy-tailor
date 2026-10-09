@@ -12,7 +12,12 @@ import type { Cloth } from "../types";
 import { generateBarcodeDataUrl, PRINT_BARCODE } from "../lib/barcode";
 import { customerBillScanCode } from "../lib/scan-basket";
 import { buildCustomerBillHtml, type BillBarcode } from "../lib/bill-html";
-import { summarizeCustomerOrder, groupClothsForCustomerBill, customerBillItemLabel } from "../lib/customer-order";
+import {
+  summarizeCustomerOrder,
+  groupClothsForCustomerBill,
+  customerBillSlipName,
+  customerBillClothNos,
+} from "../lib/customer-order";
 import { formatCurrency } from "../lib/payments";
 import {
   exportBillForNative,
@@ -23,14 +28,12 @@ import {
 import { canPrintThermal, printThermalTicket } from "../lib/thermal-print";
 import { formatCalendarDate } from "../lib/utils";
 import {
-  formatPrintDateTime,
   buildCustomerBillTicketLines,
+  buildCustomerBillAfterBarcodeLines,
 } from "../lib/print-ticket";
 import { useAndroidBackHandler } from "../hooks/useAndroidBackHandler";
-import { APP_NAME, BILL_POLICY_NOTE } from "../lib/app-config";
-import { getLogoDataUrl } from "../lib/logo";
+import { APP_NAME, BILL_POLICY_NOTE, SHOP_ADDRESS, SHOP_PHONE } from "../lib/app-config";
 import { Button } from "./ui";
-import { BrandLogo } from "./BrandLogo";
 
 export function CustomerBillPrintSheet({
   cloths,
@@ -47,7 +50,6 @@ export function CustomerBillPrintSheet({
   );
   const summary = useMemo(() => summarizeCustomerOrder(sorted), [sorted]);
   const [barcodes, setBarcodes] = useState<BillBarcode[]>([]);
-  const [logoDataUrl, setLogoDataUrl] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
@@ -81,8 +83,6 @@ export function CustomerBillPrintSheet({
       .catch(() => setError("Could not generate barcode for bill"))
       .finally(() => setLoading(false));
 
-    void getLogoDataUrl().then(setLogoDataUrl);
-
     return () => {
       document.body.style.overflow = "";
     };
@@ -90,13 +90,13 @@ export function CustomerBillPrintSheet({
 
   const printBillHtmlDoc = useMemo(() => {
     if (barcodes.length === 0) return null;
-    return buildCustomerBillHtml(sorted, barcodes, new Date(), logoDataUrl, { copies: 2 });
-  }, [sorted, barcodes, logoDataUrl]);
+    return buildCustomerBillHtml(sorted, barcodes, new Date(), "", { copies: 2 });
+  }, [sorted, barcodes]);
 
   const billHtml = useMemo(() => {
     if (barcodes.length === 0) return null;
-    return buildCustomerBillHtml(sorted, barcodes, new Date(), logoDataUrl);
-  }, [sorted, barcodes, logoDataUrl]);
+    return buildCustomerBillHtml(sorted, barcodes);
+  }, [sorted, barcodes]);
 
   async function handlePrint() {
     if (!printBillHtmlDoc || printingRef.current) return;
@@ -117,14 +117,14 @@ export function CustomerBillPrintSheet({
       if (canPrintThermal()) {
         const result = await printThermalTicket({
           title: APP_NAME,
-          headerImageUrl: logoDataUrl || undefined,
           barcodeValue: customerBillScanCode(
             summary.orderCode,
             summary.codes[0] || "",
           ),
           lines: buildCustomerBillTicketLines(sorted),
-          footer: BILL_POLICY_NOTE,
+          afterBarcodeLines: buildCustomerBillAfterBarcodeLines(),
           copies: 2,
+          bold: false,
         });
         if (result.ok) {
           setStatus("Printed");
@@ -237,145 +237,104 @@ export function CustomerBillPrintSheet({
           </p>
         )}
 
-        <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-lg shadow-slate-200/60">
-          <div className="border-b-2 border-slate-900 pb-3 text-center">
-            <BrandLogo size={96} className="mx-auto mb-2 h-24 w-24" />
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">
-              Customer Bill / Receipt
+        <div className="w-full max-w-[320px] border border-slate-200 bg-white px-4 py-5 shadow-lg shadow-slate-200/60">
+          <p className="text-center text-xl font-semibold uppercase tracking-wide text-ink">
+            {APP_NAME}
+          </p>
+          {SHOP_PHONE ? (
+            <p className="mt-1 text-center text-xs font-medium text-ink">
+              Contact No - {SHOP_PHONE}
             </p>
-          </div>
+          ) : null}
 
-          <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
-            <div>
-              <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
-                Customer
-              </p>
-              <p className="font-semibold text-slate-900">
-                {summary.customerName}
+          <div className="mt-4 flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-[11px] font-medium text-ink">Delivery Date</p>
+              <p className="text-base font-semibold leading-tight text-ink">
+                {summary.deliveryDate ? formatCalendarDate(summary.deliveryDate) : "—"}
               </p>
             </div>
-            <div>
-              <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
-                Printed
-              </p>
-              <p className="font-semibold text-slate-900">
-                {formatPrintDateTime()}
-              </p>
-            </div>
-            <div className="col-span-2">
-              <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
-                Order Code
-              </p>
-              <p className="font-mono text-sm font-semibold text-ink">
+            <div className="min-w-0 text-right">
+              <p className="text-[11px] font-medium text-ink">Order No</p>
+              <p className="text-base font-semibold leading-tight text-ink">
                 {summary.orderCode || summary.codes[0] || "—"}
               </p>
-              {summary.orderCode && summary.codes.length > 0 ? (
-                <p className="mt-0.5 font-mono text-[11px] text-slate-500">
-                  Cloths {summary.codes.length <= 4 ? summary.codes.join(" · ") : `${summary.codes[0]} – ${summary.codes[summary.codes.length - 1]}`}
-                </p>
-              ) : null}
             </div>
-            {summary.givenDate ? (
-              <div>
-                <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
-                  Order date
-                </p>
-                <p className="font-semibold text-slate-900">
-                  {formatCalendarDate(summary.givenDate)}
-                </p>
-              </div>
-            ) : null}
-            {summary.deliveryDate ? (
-              <div>
-                <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
-                  Delivery date
-                </p>
-                <p className="font-semibold text-slate-900">
-                  {formatCalendarDate(summary.deliveryDate)}
-                </p>
-              </div>
-            ) : null}
           </div>
 
-          <div className="mt-4 space-y-3 border-t border-slate-100 pt-3">
+          <p className="mt-4 text-lg font-semibold leading-snug text-ink">
+            Name - {summary.customerName}
+          </p>
+          <p className="mt-1 text-sm font-medium text-ink">
+            Contact No - {summary.customerPhone || ""}
+          </p>
+          <p className="mt-1 text-sm font-medium text-ink">
+            Booking Date - {summary.givenDate ? formatCalendarDate(summary.givenDate) : "—"}
+          </p>
+
+          <div className="mt-4 space-y-1.5">
             {groupClothsForCustomerBill(sorted).map((item, i) => (
-              <div key={`${item.name}-${i}`} className="text-sm">
-                <p>
-                  <span className="mr-1.5 font-semibold text-slate-400">
-                    {i + 1}.
-                  </span>
-                  <span className="font-semibold text-slate-800">
-                    {customerBillItemLabel(item)}
-                  </span>
-                </p>
+              <div key={`${item.name}-${i}`} className="flex items-baseline justify-between gap-3 text-sm font-medium text-ink">
+                <span>
+                  {i + 1}. {customerBillSlipName(item)}
+                </span>
+                <span className="font-mono text-xs">
+                  {customerBillClothNos(item)}
+                </span>
               </div>
             ))}
           </div>
 
-          <div className="mt-4 space-y-1 border-t border-dashed border-slate-200 pt-3 text-sm">
-            <div className="flex justify-between font-bold text-slate-900">
-              <span>Total amount</span>
-              <span>
-                {formatCurrency(summary.totalBill - summary.totalDiscount)}
-              </span>
-            </div>
-            <div className="flex justify-between text-slate-600">
+          <div className="mt-4 space-y-1 border-t border-ink pt-3 text-sm font-medium text-ink">
+            <p className="flex justify-between gap-3">
+              <span>Total Amount</span>
+              <span>{formatCurrency(summary.totalBill - summary.totalDiscount)}</span>
+            </p>
+            <p className="flex justify-between gap-3">
               <span>Advance</span>
               <span>{formatCurrency(summary.totalAdvance)}</span>
-            </div>
+            </p>
             {summary.totalPart > 0 ? (
-              <div className="flex justify-between text-slate-600">
+              <p className="flex justify-between gap-3">
                 <span>Part paid</span>
                 <span>{formatCurrency(summary.totalPart)}</span>
-              </div>
+              </p>
             ) : null}
-            <div className="mt-2 flex justify-between border-t-2 border-slate-900 pt-3 text-lg font-black text-slate-900">
+            <p className="flex justify-between gap-3 pt-1 text-xl font-semibold underline decoration-2 underline-offset-2">
               <span>Pending</span>
               <span>{formatCurrency(summary.totalPending)}</span>
-            </div>
-          </div>
-
-          {summary.notes && (
-            <p className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-center text-xs text-slate-600">
-              <strong>Note:</strong> {summary.notes}
-            </p>
-          )}
-
-          <p className="mt-4 text-center text-xs text-slate-400">
-            Thank you for your order — please keep this bill for pickup.
-          </p>
-
-          <div className="mt-3 border-t border-dashed border-slate-200 pt-3 text-center text-[11px] leading-relaxed text-slate-700">
-            <p className="whitespace-normal break-words text-center">
-              {BILL_POLICY_NOTE}
             </p>
           </div>
 
-          <div className="mt-5 border-t-2 border-dashed border-seam pt-4">
-            <p className="mb-3 text-center text-[10px] font-semibold uppercase tracking-widest text-slate-400">
-              Scan to open customer bill
+          {summary.notes ? (
+            <p className="mt-3 text-sm font-medium text-ink whitespace-pre-wrap">
+              Note - {summary.notes}
             </p>
+          ) : null}
+
+          <div className="mt-4 text-center">
             {loading && (
-              <p className="animate-pulse text-center text-sm text-slate-400">
-                Generating barcodes…
+              <p className="animate-pulse text-sm text-slate-400">
+                Generating barcode…
               </p>
             )}
-            <div className="flex flex-wrap justify-center gap-3">
-              {barcodes.map((b) => (
-                <div key={b.code} className="text-center">
-                  <img
-                    src={b.dataUrl}
-                    alt={`Barcode ${b.code}`}
-                    className="mx-auto w-[180px] bg-white"
-                    style={{ imageRendering: "pixelated" }}
-                  />
-                  <p className="font-mono text-xs font-bold text-ink">
-                    {b.code}
-                  </p>
-                </div>
-              ))}
-            </div>
+            {barcodes.map((b) => (
+              <div key={b.code}>
+                <img
+                  src={b.dataUrl}
+                  alt={`Barcode ${b.code}`}
+                  className="mx-auto h-12 w-[200px] bg-white object-contain"
+                  style={{ imageRendering: "pixelated" }}
+                />
+                <p className="mt-1 font-mono text-xs font-medium text-ink">{b.code}</p>
+              </div>
+            ))}
           </div>
+
+          <p className="mt-4 text-sm font-medium text-ink">Add- {SHOP_ADDRESS}</p>
+          <p className="mt-2 text-[10px] leading-relaxed text-ink">
+            {BILL_POLICY_NOTE}
+          </p>
         </div>
 
         <div className="mt-4 flex w-full max-w-md flex-col gap-2">

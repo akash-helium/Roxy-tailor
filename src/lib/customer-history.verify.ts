@@ -43,6 +43,7 @@ function cloth(partial: Partial<Cloth> & Pick<Cloth, 'id' | 'customerName'>): Cl
     deliveryDate: null,
     cutterExpectedDate: null,
     tailorExpectedDate: null,
+    packed: false,
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
     ...partial,

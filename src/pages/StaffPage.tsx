@@ -3,6 +3,7 @@ import { Plus, Scissors, Search, Shirt, Trash2, Wallet } from 'lucide-react';
 import { addStaff, removeStaff } from '../lib/data';
 import { useAppData } from '../hooks/useAppData';
 import { formatCurrency, summarizeStaffPayments } from '../lib/payments';
+import { staffWorkBoards } from '../lib/staff-work';
 import { StaffPaymentSheet } from '../components/StaffPaymentSheet';
 import { useStaffTypes } from '../contexts/StaffTypesContext';
 import { staffTypeBadgeClass, type Staff, type StaffType } from '../types';
@@ -49,17 +50,18 @@ export function StaffPage() {
   );
   const totalPending = payRows.reduce((sum, row) => sum + row.pay.totalPending, 0);
   const needle = query.trim().toLowerCase();
-  const visible = useMemo(
-    () =>
-      needle
-        ? payRows.filter((row) =>
-            `${row.member.name} ${row.member.phone} ${getLabel(row.member.type)}`
-              .toLowerCase()
-              .includes(needle),
-          )
-        : payRows,
-    [payRows, needle, getLabel],
-  );
+  const visible = useMemo(() => {
+    if (!needle) return payRows;
+    const digits = needle.replace(/\D/g, '');
+    return payRows.filter((row) => {
+      const name = row.member.name.toLowerCase();
+      const phone = row.member.phone.replace(/\D/g, '');
+      const role = getLabel(row.member.type).toLowerCase();
+      if (name.includes(needle) || role.includes(needle)) return true;
+      if (digits.length >= 3 && phone.includes(digits)) return true;
+      return `${name} ${row.member.phone} ${role}`.includes(needle);
+    });
+  }, [payRows, needle, getLabel]);
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
@@ -146,27 +148,30 @@ export function StaffPage() {
         </Card>
       ) : (
         <div className="space-y-2">
-          {staff.length > 8 && (
-            <div className="relative">
-              <Search className="pointer-events-none absolute start-3 top-1/2 h-4 w-4 -translate-y-1/2 text-ink-muted" />
-              <input
-                type="search"
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="Search staff..."
-                className="w-full rounded-[10px] border border-seam bg-white py-2.5 ps-9 pe-3 text-sm outline-none focus:border-action focus:ring-2 focus:ring-action/20"
-              />
-            </div>
-          )}
+          <div className="relative">
+            <Search className="pointer-events-none absolute start-3 top-1/2 h-4 w-4 -translate-y-1/2 text-ink-muted" />
+            <input
+              type="search"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Search name, phone, or role"
+              data-allow-typing
+              autoComplete="off"
+              className="w-full rounded-[10px] border border-seam bg-white py-2.5 ps-9 pe-3 text-sm outline-none focus:border-action focus:ring-2 focus:ring-action/20"
+            />
+          </div>
 
           {visible.length === 0 ? (
             <Card className="py-8 text-center text-sm text-ink-muted">No one matches that search.</Card>
           ) : (
             visible.map((row) => {
               const pending = row.pay.totalPending;
+              const work = staffWorkBoards(row.member, cloths);
               const meta = [
+                `Working ${work.working.length}`,
+                `Pending ${work.pending.length}`,
+                `Done ${work.done.length}`,
                 pending > 0 ? `Still due ${formatCurrency(pending)}` : 'Settled',
-                `${row.pay.clothCount} cloth${row.pay.clothCount === 1 ? '' : 's'}`,
               ].join(' · ');
 
               return (
@@ -192,7 +197,7 @@ export function StaffPage() {
                             <span className="text-xs text-ink-muted">{row.member.phone}</span>
                           ) : null}
                         </div>
-                        <p className="mt-0.5 truncate text-xs text-ink-muted">{meta}</p>
+                        <p className="mt-0.5 text-xs text-ink-muted">{meta}</p>
                       </div>
                       {pending > 0 ? (
                         <span className="shrink-0 font-display text-base font-bold tabular-nums text-cut">

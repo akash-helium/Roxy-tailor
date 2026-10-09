@@ -89,6 +89,7 @@ export interface Cloth {
   deliveryDate: string | null;
   cutterExpectedDate: string | null;
   tailorExpectedDate: string | null;
+  packed: boolean;
   createdAt: string;
   updatedAt: string;
 }

@@ -131,6 +131,13 @@ export async function adjustClothQuantity(
 ) {
   const qty = Math.min(50, Math.max(1, Math.floor(Number(quantity))));
   const current = Math.max(1, group.length);
+  const sharedCode = cloth.code.trim();
+  if (sharedCode) {
+    const mismatched = group
+      .filter((item) => item.id !== cloth.id && item.code !== sharedCode)
+      .map((item) => item.id);
+    if (mismatched.length > 0) await updateClothsCode(mismatched, sharedCode);
+  }
   if (!Number.isFinite(qty) || qty === current) return;
 
   if (qty < current) {
@@ -162,12 +169,22 @@ export async function adjustClothQuantity(
     tailorExpectedDate: cloth.tailorExpectedDate,
     cutterPayAmount: cloth.cutterPayAmount,
     tailorPayAmount: cloth.tailorPayAmount,
+    code: cloth.code,
     orderBatchId: cloth.orderBatchId || undefined,
     orderCode: cloth.orderCode || undefined,
     staffJobs: cloth.staffJobs ?? [],
   };
 
   await registerClothOrder(Array.from({ length: extras }, () => payload));
+}
+
+export async function updateClothsCode(ids: string[], code: string) {
+  const next = code.trim();
+  if (ids.length === 0 || !next) return;
+  const mode = await resolveWriteStorageMode();
+  return mode === "local"
+    ? local.updateClothsCodeLocal(ids, next)
+    : remote.updateClothsCode(ids, next);
 }
 
 export async function updateClothMeasurements(
@@ -235,6 +252,14 @@ export async function updateClothCustomerPhone(ids: string[], customerPhone: str
   return mode === "local"
     ? local.updateClothCustomerPhoneLocal(ids, customerPhone)
     : remote.updateClothCustomerPhone(ids, customerPhone);
+}
+
+export async function setClothsPacked(ids: string[], packed: boolean) {
+  if (ids.length === 0) return;
+  const mode = await resolveWriteStorageMode();
+  return mode === "local"
+    ? local.setClothsPackedLocal(ids, packed)
+    : remote.setClothsPacked(ids, packed);
 }
 
 export async function updateClothDates(

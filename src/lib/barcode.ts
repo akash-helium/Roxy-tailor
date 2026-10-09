@@ -33,6 +33,7 @@ export type BarcodeRenderOptions = {
   displayValue?: boolean;
   /** Target canvas width in pixels (203 DPI thermal = 576). */
   maxWidth?: number;
+  margin?: number;
 };
 
 function toBarcodeValue(text: string) {
@@ -62,6 +63,7 @@ export function renderBarcodeCanvas(text: string, options: BarcodeRenderOptions 
   const displayValue = options.displayValue ?? false;
   const maxWidth = options.maxWidth ?? PRINT_BARCODE.maxWidth;
   let moduleWidth = options.moduleWidth ?? PRINT_BARCODE.moduleWidth;
+  const margin = options.margin ?? Math.max(moduleWidth * 10, 24);
 
   const canvas = document.createElement('canvas');
 
@@ -70,7 +72,7 @@ export function renderBarcodeCanvas(text: string, options: BarcodeRenderOptions 
       format: PRINT_FORMAT,
       width,
       height,
-      margin: Math.max(width * 10, 24),
+      margin,
       displayValue,
       fontSize: 18,
       fontOptions: 'bold',
@@ -109,6 +111,74 @@ export async function generateBarcodeDataUrl(
   });
 
   return canvas.toDataURL('image/png');
+}
+
+/** Date left, barcode center, order number right — one thermal raster row. */
+export function renderStaffHeaderBannerCanvas(
+  dateLabel: string,
+  orderNumber: string,
+  barcodeValue: string,
+) {
+  const width = THERMAL_PRINTER.printableDots;
+  const side = 176;
+  const barcode = renderBarcodeCanvas(barcodeValue, {
+    height: 68,
+    moduleWidth: 2,
+    maxWidth: Math.max(140, width - side * 2 - 4),
+    displayValue: false,
+    margin: 4,
+  });
+  const height = Math.max(88, barcode.height + 18);
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return canvas;
+
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, width, height);
+  ctx.fillStyle = '#000000';
+  ctx.font = '500 14px sans-serif';
+  ctx.textBaseline = 'top';
+  ctx.textAlign = 'left';
+  ctx.fillText('Delivery Date', 2, 2, side - 6);
+  ctx.textAlign = 'right';
+  ctx.fillText('Order No', width - 2, 2, side - 6);
+  ctx.font = '700 30px sans-serif';
+
+  const wrap = (text: string, maxWidth: number) => {
+    const words = text.trim().split(/\s+/).filter(Boolean);
+    const lines: string[] = [];
+    let current = '';
+    for (const word of words) {
+      const next = current ? `${current} ${word}` : word;
+      if (current && ctx.measureText(next).width > maxWidth) {
+        lines.push(current);
+        current = word;
+      } else {
+        current = next;
+      }
+    }
+    if (current) lines.push(current);
+    return lines.slice(0, 3);
+  };
+
+  const drawSide = (text: string, x: number, align: CanvasTextAlign) => {
+    const lines = wrap(text || '—', side - 6);
+    const lineHeight = 32;
+    const startY = 20;
+    ctx.textAlign = align;
+    ctx.textBaseline = 'top';
+    lines.forEach((line, index) => {
+      ctx.fillText(line, x, startY + index * lineHeight, side - 6);
+    });
+  };
+
+  drawSide(dateLabel, 2, 'left');
+  ctx.drawImage(barcode, Math.round((width - barcode.width) / 2), 14);
+  ctx.font = '700 30px ui-monospace, monospace';
+  drawSide(orderNumber, width - 2, 'right');
+  return canvas;
 }
 
 /** Larger on-screen preview (laser cannot read LCD — print the ticket). */

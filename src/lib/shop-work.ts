@@ -25,12 +25,21 @@ export function clothMatchesShopStage(cloth: Cloth, stage: ShopStageFilter) {
 export function clothMatchesShopDate(cloth: Cloth, date: string) {
   const day = date.trim().slice(0, 10);
   if (!day) return true;
-  return dayKey(cloth.deliveryDate) === day || dayKey(cloth.givenDate) === day;
+  return dayKey(cloth.deliveryDate) === day;
 }
 
-export function filterShopCloths(cloths: Cloth[], stage: ShopStageFilter, date: string) {
+export function clothMatchesDeliveryRange(cloth: Cloth, from: string, to: string) {
+  if (!from && !to) return true;
+  const day = dayKey(cloth.deliveryDate);
+  if (!day) return false;
+  if (from && day < from) return false;
+  if (to && day > to) return false;
+  return true;
+}
+
+export function filterShopCloths(cloths: Cloth[], stage: ShopStageFilter, from: string, to = from) {
   return cloths.filter(
-    (cloth) => clothMatchesShopStage(cloth, stage) && clothMatchesShopDate(cloth, date),
+    (cloth) => clothMatchesShopStage(cloth, stage) && clothMatchesDeliveryRange(cloth, from, to),
   );
 }
 
@@ -58,9 +67,9 @@ export function todayBoardCloths(cloths: Cloth[], day: string, today = todayDate
 
   for (const cloth of cloths) {
     const delivery = dayKey(cloth.deliveryDate);
-    const isDue = delivery === day && cloth.status !== 'completed';
-    const isDone = clothDoneOnDay(cloth, day);
-    const isOverdue = day === today && Boolean(delivery) && delivery < today && cloth.status !== 'completed';
+    const isDue = delivery === day && cloth.status !== 'completed' && day >= today;
+    const isDone = delivery === day && cloth.status === 'completed';
+    const isOverdue = delivery === day && cloth.status !== 'completed' && day < today;
     if (!isDue && !isDone && !isOverdue) continue;
     if (seen.has(cloth.id)) continue;
     seen.add(cloth.id);

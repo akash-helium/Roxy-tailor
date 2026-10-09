@@ -75,6 +75,7 @@ function read(): AppData {
           (cloth as { expectedDate?: string | null }).expectedDate ??
           null,
         tailorExpectedDate: cloth.tailorExpectedDate ?? null,
+        packed: Boolean(cloth.packed),
         staffJobs: jobsFromLegacyColumns({
           ...cloth,
           cutterId: cloth.cutterId ?? null,
@@ -254,6 +255,7 @@ export function registerClothOrderLocal(
       deliveryDate: input.deliveryDate?.trim() || null,
       cutterExpectedDate: input.cutterExpectedDate,
       tailorExpectedDate: input.tailorExpectedDate || null,
+      packed: false,
       staffJobs: jobsFromLegacyColumns({
         cutterId: input.cutterId || null,
         tailorId: input.tailorId || null,
@@ -320,6 +322,14 @@ export function writeStaffJobsLocal(id: string, jobs: Cloth["staffJobs"]) {
 
 export function updateClothCustomerPhoneLocal(ids: string[], customerPhone: string) {
   for (const id of ids) updateClothLocal(id, { customerPhone });
+}
+
+export function setClothsPackedLocal(ids: string[], packed: boolean) {
+  for (const id of ids) updateClothLocal(id, { packed });
+}
+
+export function updateClothsCodeLocal(ids: string[], code: string) {
+  for (const id of ids) updateClothLocal(id, { code });
 }
 
 export function updateClothDatesLocal(

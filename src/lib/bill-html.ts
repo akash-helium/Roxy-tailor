@@ -1,13 +1,13 @@
-import { APP_NAME, BILL_POLICY_NOTE } from "./app-config";
+import { APP_NAME, BILL_POLICY_NOTE, SHOP_ADDRESS, SHOP_PHONE } from "./app-config";
 import { formatCurrency } from "./payments";
 import { formatCalendarDate } from "./utils";
 import type { Cloth } from "../types";
 import {
   summarizeCustomerOrder,
   groupClothsForCustomerBill,
-  customerBillItemLabel,
+  customerBillSlipName,
+  customerBillClothNos,
 } from "./customer-order";
-import { formatPrintDateTime } from "./print-ticket";
 
 export type BillBarcode = { code: string; dataUrl: string };
 
@@ -19,36 +19,36 @@ function escapeHtml(text: string) {
     .replace(/"/g, "&quot;");
 }
 
-/** Customer bill HTML — matches on-screen receipt (Windows print + Android share/print). */
+/** Customer bill HTML — handwritten slip layout (Windows print + Android share/print). */
 export function buildCustomerBillHtml(
   cloths: Cloth[],
   barcodes: BillBarcode[],
-  printedAt = new Date(),
-  logoDataUrl = "",
+  _printedAt = new Date(),
+  _logoDataUrl = "",
   options?: { copies?: number },
 ) {
   const summary = summarizeCustomerOrder(cloths);
   const orderCode = summary.orderCode || summary.codes[0] || "—";
-  const printedLabel = formatPrintDateTime(printedAt);
+  const delivery = summary.deliveryDate ? formatCalendarDate(summary.deliveryDate) : "—";
+  const booking = summary.givenDate ? formatCalendarDate(summary.givenDate) : "—";
   const copies = Math.max(1, Math.min(2, options?.copies ?? 1));
 
   const rows = groupClothsForCustomerBill(cloths)
-    .map(
-      (item, i) => `
+    .map((item, i) => {
+      const clothNo = customerBillClothNos(item);
+      return `
     <div class="item-row">
       <span class="num">${i + 1}.</span>
-      <div class="item-body">
-        <div class="item-title">${escapeHtml(customerBillItemLabel(item))}</div>
-      </div>
-    </div>`,
-    )
+      <span class="item-title">${escapeHtml(customerBillSlipName(item))}</span>
+      ${clothNo ? `<span class="clno">${escapeHtml(clothNo)}</span>` : ""}
+    </div>`;
+    })
     .join("");
 
   const primaryBarcode = barcodes[0];
   const barcodeBlock = primaryBarcode
     ? `
     <div class="barcode-block">
-      <div class="barcode-label">Scan to open customer bill</div>
       <img src="${primaryBarcode.dataUrl}" alt="Barcode ${escapeHtml(primaryBarcode.code)}" />
       <div class="barcode-code-lg">${escapeHtml(primaryBarcode.code)}</div>
     </div>`
@@ -64,175 +64,130 @@ export function buildCustomerBillHtml(
     font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
     color: #000;
     margin: 0 auto;
-    padding: 4mm 2mm 8mm;
+    padding: 3mm 2mm 8mm;
     max-width: 76mm;
     background: #fff;
-    -webkit-font-smoothing: antialiased;
-  }
-  .header {
-    text-align: center;
-    border-bottom: 2px solid #000;
-    padding-bottom: 8px;
-    margin-bottom: 10px;
-  }
-  .logo {
-    display: block;
-    width: 28mm;
-    height: 28mm;
-    object-fit: contain;
-    margin: 0 auto 4px;
-    filter: grayscale(1) contrast(3);
   }
   .shop {
+    text-align: center;
     font-size: 20px;
-    font-weight: 900;
-    color: #000;
-    letter-spacing: -0.02em;
-  }
-  .tagline {
-    font-size: 11px;
-    color: #000;
-    font-weight: 800;
-    margin-top: 4px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
     text-transform: uppercase;
-    letter-spacing: 0.14em;
+    margin: 0 0 1mm;
   }
-  .meta {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 12px;
-    margin-bottom: 16px;
+  .shop-phone {
+    text-align: center;
+    font-size: 12px;
+    font-weight: 500;
+    margin: 0 0 3mm;
   }
-  .meta .label {
-    color: #000;
+  .banner {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 2mm;
+    margin-bottom: 3mm;
+  }
+  .banner .col { min-width: 0; }
+  .banner .col.right { text-align: right; }
+  .banner .label {
     font-size: 10px;
-    font-weight: 800;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
+    font-weight: 500;
   }
-  .meta .value {
-    font-weight: 800;
-    color: #000;
+  .banner .value {
     font-size: 15px;
-    margin-top: 2px;
+    font-weight: 700;
+    line-height: 1.15;
+    word-break: break-word;
   }
-  .meta .full { grid-column: 1 / -1; }
-  .meta .code-value {
-    font-family: ui-monospace, monospace;
-    color: #000;
-    font-weight: 800;
+  .field { font-size: 13px; font-weight: 500; margin: 1.2mm 0; }
+  .name {
+    font-size: 16px;
+    font-weight: 700;
+    line-height: 1.2;
+    margin: 2mm 0 1.5mm;
+    word-break: break-word;
   }
-  .items {
+  .items { margin: 3mm 0 2mm; }
+  .divider {
+    border: 0;
     border-top: 1px solid #000;
-    padding-top: 12px;
-    margin-bottom: 14px;
+    margin: 1mm 0 2.5mm;
   }
   .item-row {
     display: flex;
-    gap: 8px;
-    padding: 8px 0;
-    font-size: 14px;
-    color: #000;
-    align-items: flex-start;
+    gap: 2mm;
+    align-items: baseline;
+    font-size: 13px;
+    font-weight: 500;
+    padding: 1mm 0;
   }
-  .num { color: #000; font-weight: 800; min-width: 1.25rem; }
-  .item-body { flex: 1; min-width: 0; }
-  .item-title { font-weight: 800; }
-  .item-detail {
-    margin-top: 3px;
+  .num { flex: 0 0 auto; }
+  .item-title { flex: 1 1 auto; min-width: 0; }
+  .clno {
+    flex: 0 1 auto;
+    font-family: ui-monospace, monospace;
     font-size: 12px;
-    line-height: 1.4;
-    color: #000;
-    font-weight: 700;
-    word-break: break-word;
+    font-weight: 500;
+    text-align: right;
   }
-  .totals {
-    border-top: 1px dashed #000;
-    padding-top: 12px;
-    font-size: 15px;
-  }
-  .totals .row {
+  .money {
     display: flex;
     justify-content: space-between;
-    padding: 6px 0;
-    color: #000;
-    font-weight: 700;
+    align-items: baseline;
+    gap: 3mm;
+    font-size: 13px;
+    font-weight: 500;
+    margin: 1mm 0;
   }
-  .totals .row.total {
-    color: #000;
-    font-weight: 900;
-  }
-  .totals .row.pending {
+  .pending {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 3mm;
     font-size: 18px;
-    font-weight: 900;
-    color: #000;
-    background: #fff;
-    margin-top: 6px;
-    padding: 8px 0 4px;
-    border-top: 2px solid #000;
-  }
-  .totals .row.pending span {
-    font-weight: 900;
-  }
-  .notes {
-    margin-top: 12px;
-    padding: 10px 0;
-    font-size: 12px;
-    color: #000;
     font-weight: 700;
+    margin: 2mm 0 2mm;
+    text-decoration: underline;
+    text-underline-offset: 2px;
   }
-  .barcodes {
-    margin-top: 16px;
-    padding-top: 12px;
-    border-top: 2px dashed #000;
+  .note {
+    font-size: 12px;
+    font-weight: 500;
+    margin: 1mm 0 2mm;
+    white-space: pre-wrap;
+    word-break: break-word;
   }
-  .barcode-block { text-align: center; padding: 4px 0; background: #fff; }
-  .barcode-label {
-    font-size: 10px;
-    font-weight: 800;
-    text-transform: uppercase;
-    letter-spacing: 0.12em;
-    margin-bottom: 6px;
+  .policy {
+    margin: 2mm 0 0;
+    font-size: 9px;
+    line-height: 1.4;
+    font-weight: 400;
+    word-wrap: break-word;
   }
+  .barcode-block { text-align: center; padding: 2mm 0; }
   .barcode-block img {
     display: block;
-    width: 46mm;
-    max-width: 46mm;
-    height: 11mm;
-    max-height: 11mm;
+    width: 52mm;
+    max-width: 52mm;
+    height: 12mm;
     object-fit: contain;
     margin: 0 auto;
     image-rendering: pixelated;
     image-rendering: crisp-edges;
-    filter: grayscale(1) contrast(10);
   }
   .barcode-code-lg {
     font-family: ui-monospace, monospace;
-    font-size: 18px;
-    font-weight: 900;
-    color: #000;
-    margin-top: 2px;
-    letter-spacing: 0.08em;
-  }
-  .footer {
-    text-align: center;
-    margin-top: 14px;
     font-size: 12px;
-    color: #000;
-    font-weight: 700;
+    font-weight: 500;
+    margin-top: 1mm;
+    letter-spacing: 0.04em;
   }
-  .policy {
-    margin-top: 12px;
-    padding-top: 10px;
-    border-top: 1px dashed #000;
-    text-align: center;
-    font-size: 10px;
-    line-height: 1.5;
-    color: #000;
-    font-weight: 700;
-    white-space: normal;
-    word-wrap: break-word;
-    overflow-wrap: anywhere;
+  .address {
+    margin-top: 3mm;
+    font-size: 12px;
+    font-weight: 500;
   }
   .receipt + .receipt {
     page-break-before: always;
@@ -246,43 +201,31 @@ export function buildCustomerBillHtml(
   }
 </style></head><body>
 ${Array.from({ length: copies }, () => `  <div class="receipt">
-  <div class="header">
-    ${
-      logoDataUrl
-        ? `<img class="logo" src="${logoDataUrl}" alt="${escapeHtml(APP_NAME)}" />`
-        : `<div class="shop">${escapeHtml(APP_NAME)}</div>`
-    }
-    <div class="tagline">Customer Bill / Receipt</div>
+  <div class="shop">${escapeHtml(APP_NAME)}</div>
+  ${SHOP_PHONE ? `<div class="shop-phone">Contact No - ${escapeHtml(SHOP_PHONE)}</div>` : ""}
+  <div class="banner">
+    <div class="col">
+      <div class="label">Delivery Date</div>
+      <div class="value">${escapeHtml(delivery)}</div>
+    </div>
+    <div class="col right">
+      <div class="label">Order No</div>
+      <div class="value">${escapeHtml(orderCode)}</div>
+    </div>
   </div>
-  <div class="meta">
-    <div>
-      <div class="label">Customer</div>
-      <div class="value">${escapeHtml(summary.customerName)}</div>
-    </div>
-    <div>
-      <div class="label">Printed</div>
-      <div class="value">${escapeHtml(printedLabel)}</div>
-    </div>
-    <div class="full">
-      <div class="label">Order Code</div>
-      <div class="value code-value">${escapeHtml(orderCode)}</div>
-    </div>
-    ${summary.givenDate ? `<div><div class="label">Order date</div><div class="value">${escapeHtml(formatCalendarDate(summary.givenDate))}</div></div>` : ""}
-    ${summary.deliveryDate ? `<div><div class="label">Delivery date</div><div class="value">${escapeHtml(formatCalendarDate(summary.deliveryDate))}</div></div>` : ""}
-  </div>
+  <div class="name">Name - ${escapeHtml(summary.customerName)}</div>
+  ${summary.customerPhone ? `<div class="field">Contact No - ${escapeHtml(summary.customerPhone)}</div>` : `<div class="field">Contact No -</div>`}
+  <div class="field">Booking Date - ${escapeHtml(booking)}</div>
   <div class="items">${rows}</div>
-  <div class="totals">
-    <div class="row total"><span>Total amount</span><span>${formatCurrency(summary.totalBill - summary.totalDiscount)}</span></div>
-    <div class="row"><span>Advance</span><span>${formatCurrency(summary.totalAdvance)}</span></div>
-    ${summary.totalPart > 0 ? `<div class="row"><span>Part paid</span><span>${formatCurrency(summary.totalPart)}</span></div>` : ""}
-    <div class="row pending"><span>Pending</span><span>${formatCurrency(summary.totalPending)}</span></div>
-  </div>
-  ${summary.notes ? `<div class="notes"><strong>Note:</strong> ${escapeHtml(summary.notes)}</div>` : ""}
-  <div class="footer">Thank you for your order - please keep this bill for pickup.</div>
+  <hr class="divider" />
+  <div class="money"><span>Total Amount</span><span>${formatCurrency(summary.totalBill - summary.totalDiscount)}</span></div>
+  <div class="money"><span>Advance</span><span>${formatCurrency(summary.totalAdvance)}</span></div>
+  ${summary.totalPart > 0 ? `<div class="money"><span>Part paid</span><span>${formatCurrency(summary.totalPart)}</span></div>` : ""}
+  <div class="pending"><span>Pending</span><span>${formatCurrency(summary.totalPending)}</span></div>
+  ${summary.notes ? `<div class="note">Note - ${escapeHtml(summary.notes)}</div>` : ""}
+  ${barcodeBlock}
+  <div class="address">Add- ${escapeHtml(SHOP_ADDRESS)}</div>
   <div class="policy">${escapeHtml(BILL_POLICY_NOTE)}</div>
-  <div class="barcodes">
-    ${barcodeBlock}
-  </div>
   </div>`).join("\n")}
 </body></html>`;
 }

@@ -294,7 +294,9 @@ function toClothInsertRow(
       orderCode: input.orderCode,
       staffJobs: input.staffJobs ?? [],
       customerPhone: input.customerPhone,
+      packed: false,
     }),
+    packed: false,
     staff_jobs: (input.staffJobs ?? []) as unknown as Json,
     measurement_image: null,
     notes: input.notes,
@@ -332,6 +334,10 @@ function isMissingOrderCodeColumn(error: { message?: string } | null) {
   return Boolean(error?.message && /order_code/i.test(error.message));
 }
 
+function isMissingPackedColumn(error: { message?: string } | null) {
+  return Boolean(error?.message && /\bpacked\b/i.test(error.message));
+}
+
 function withoutKey(rows: Record<string, unknown>[], key: string) {
   return rows.map((row) => {
     const next = { ...row };
@@ -356,6 +362,10 @@ async function insertClothRows(rows: ReturnType<typeof toClothInsertRow>[]) {
     current = withoutKey(current, "customer_phone");
     result = await supabase.from("cloths").insert(current as never).select("*");
   }
+  if (result.error && isMissingPackedColumn(result.error)) {
+    current = withoutKey(current, "packed");
+    result = await supabase.from("cloths").insert(current as never).select("*");
+  }
   return result;
 }
 
@@ -365,7 +375,7 @@ export async function registerCloth(input: RegisterClothInput) {
   return cloth;
 }
 
-/** Register one or more pieces in a single order. Each piece gets its own barcode. */
+/** Register one or more pieces in a single order. Pass the same `code` to share a serial across qty. */
 export async function registerClothOrder(inputs: RegisterClothInput[]) {
   if (inputs.length === 0) return [];
 
@@ -446,6 +456,47 @@ export async function updateClothSize(id: string, size: string) {
 
   if (error) throw error;
   return mapCloth(data);
+}
+
+export async function setClothsPacked(ids: string[], packed: boolean) {
+  if (ids.length === 0) return [];
+  const updated: Cloth[] = [];
+  for (const id of ids) {
+    const checks = await readMeasurementChecks(id);
+    const payload = measurementChecksPayload({ ...checks, packed });
+    const first = await supabase
+      .from("cloths")
+      .update({ packed, measurement_checks: payload })
+      .eq("id", id)
+      .select("*")
+      .single();
+    if (!first.error) {
+      updated.push(mapCloth(first.data));
+      continue;
+    }
+    if (!isMissingPackedColumn(first.error)) throw first.error;
+    const retry = await supabase
+      .from("cloths")
+      .update({ measurement_checks: payload })
+      .eq("id", id)
+      .select("*")
+      .single();
+    if (retry.error) throw retry.error;
+    updated.push(mapCloth(retry.data));
+  }
+  return updated;
+}
+
+export async function updateClothsCode(ids: string[], code: string) {
+  const next = code.trim();
+  if (ids.length === 0 || !next) return [];
+  const { data, error } = await supabase
+    .from("cloths")
+    .update({ code: next })
+    .in("id", ids)
+    .select("*");
+  if (error) throw error;
+  return (data ?? []).map(mapCloth);
 }
 
 export async function updateClothCustomerPhone(ids: string[], customerPhone: string) {

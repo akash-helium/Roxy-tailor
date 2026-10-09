@@ -58,6 +58,20 @@ export function todayDateString() {
   return `${year}-${month}-${day}`;
 }
 
+export function addCalendarDays(dateStr: string, days: number) {
+  const [year, month, day] = dateStr.split('-').map(Number);
+  if (!year || !month || !day) return dateStr;
+  const date = new Date(year, month - 1, day + days);
+  const nextYear = date.getFullYear();
+  const nextMonth = String(date.getMonth() + 1).padStart(2, '0');
+  const nextDay = String(date.getDate()).padStart(2, '0');
+  return `${nextYear}-${nextMonth}-${nextDay}`;
+}
+
+export function tomorrowDateString() {
+  return addCalendarDays(todayDateString(), 1);
+}
+
 export function formatCalendarDate(dateStr: string | null) {
   if (!dateStr) return '—';
   const [year, month, day] = dateStr.split('-').map(Number);

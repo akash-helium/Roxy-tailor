@@ -62,7 +62,7 @@ export function staffWorkGroups(staff: Staff, cloths: Cloth[]): StaffUnpaidGroup
         paidQty: needsRate ? 0 : group.length - unpaid.length,
         rate,
         pending: needsRate ? 0 : pending,
-        codes: [...new Set(group.map((item) => item.code))],
+        codes: [...new Set((unpaid.length > 0 ? unpaid : group).map((item) => item.code))],
         needsRate,
       };
     })
@@ -75,6 +75,20 @@ export function unpaidStaffGroups(staff: Staff, cloths: Cloth[]): StaffUnpaidGro
 
 export function workLineQtyCopy(group: StaffUnpaidGroup) {
   return `${group.totalQty} ${group.label} · ${group.paidQty} already paid · ${group.unpaidQty} still due`;
+}
+
+export function workLineCodes(group: StaffUnpaidGroup) {
+  return group.codes.filter(Boolean).join(' · ');
+}
+
+export function payoutClothCodes(payout: StaffPayout, cloths: Cloth[]) {
+  const ids = new Set(payout.clothIds ?? []);
+  if (ids.size === 0) return '';
+  return cloths
+    .filter((cloth) => ids.has(cloth.id))
+    .map((cloth) => cloth.code)
+    .filter(Boolean)
+    .join(' · ');
 }
 
 export function staffPayRoleLine(type: string, label?: string) {

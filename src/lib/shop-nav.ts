@@ -1,4 +1,4 @@
-import { Banknote, CheckCircle2, ClipboardList, ScanLine, Shirt, Wallet, type LucideIcon } from 'lucide-react';
+import { Banknote, CheckCircle2, ClipboardList, Package, ScanLine, Shirt, Wallet, type LucideIcon } from 'lucide-react';
 
 export type ShopNavItem = {
   name: string;
@@ -41,6 +41,14 @@ export const shopNavItems: ShopNavItem[] = [
     hint: 'Money still due',
     to: '/orders/payments',
     icon: Banknote,
+    group: 'orders',
+  },
+  {
+    name: 'Packed',
+    short: 'Packed',
+    hint: 'Packed for pickup',
+    to: '/orders/packed',
+    icon: Package,
     group: 'orders',
   },
   { name: 'Staff pay', short: 'Pay', hint: 'Payouts & pending', to: '/staff', icon: Wallet, group: 'shop' },

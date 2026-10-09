@@ -1,7 +1,7 @@
 import { useMemo, useState, type FormEvent } from 'react';
 import { Navigate, useParams } from 'react-router-dom';
-import { CheckCircle2, ChevronDown, Circle, Phone, Plus, Printer, Receipt, Search, Settings2, Trash2, UserCog } from 'lucide-react';
-import { assignCutter, assignStaffJob, assignTailor, deleteCloths, getStaffById, registerClothOrder, setClothDone } from '../lib/data';
+import { CheckCircle2, ChevronDown, Circle, Package, Phone, Plus, Printer, Receipt, Search, Settings2, Trash2, UserCog } from 'lucide-react';
+import { assignCutter, assignStaffJob, assignTailor, deleteCloths, getStaffById, registerClothOrder, setClothDone, setClothsPacked } from '../lib/data';
 import { useClothList } from '../hooks/useClothList';
 import {
   CLOTH_FILTER_OPTIONS,
@@ -13,7 +13,7 @@ import {
   type Staff,
 } from '../types';
 import { clothStageBadge, orderStageBadge } from '../lib/cloth-status';
-import { formatDate, formatCalendarDate, isPastDue, todayDateString, clothBillName } from '../lib/utils';
+import { formatDate, formatCalendarDate, isPastDue, todayDateString, clothBillName, generateClothCode } from '../lib/utils';
 import { formatCurrency, parseAmount, summarizePayments } from '../lib/payments';
 import { BarcodePrintSheet } from '../components/BarcodePrintSheet';
 import { CustomerBillPrintSheet } from '../components/CustomerBillPrintSheet';
@@ -28,9 +28,16 @@ import {
   clothCodeRange,
   orderMatchesBoard,
   parseOrderBoard,
+  orderBoardDate,
+  orderMatchesDateRange,
+  orderMatchesDeliveryDay,
+  formatOrderDateRange,
+  orderIsPacked,
   type OrderBoard,
 } from '../lib/customer-order';
 import { ClothManageSheet } from '../components/ClothManageSheet';
+import { OrderDateFilter } from '../components/OrderDateFilter';
+import { DeliveryDayPicker } from '../components/DeliveryDayPicker';
 import { GarmentSizingForm, emptyGarmentSizing } from '../components/GarmentSizingForm';
 import type { MeasurementData } from '../lib/measurements';
 import { Badge, Button, Card, Input, Modal, PageHeader, Select, Textarea } from '../components/ui';
@@ -115,11 +122,6 @@ function totalPiecesFromItems(items: ClothLineItem[]) {
   return items.reduce((sum, item) => sum + parseLineQuantity(item.quantity), 0);
 }
 
-function splitAmount(amount: number, parts: number) {
-  if (parts <= 0) return amount;
-  return Math.round((amount / parts) * 100) / 100;
-}
-
 const emptyForm = {
   customerName: '',
   customerPhone: '',
@@ -149,13 +151,13 @@ const BOARD_COPY: Record<OrderBoard, { title: string; subtitle: string; empty: s
   },
   pending: {
     title: 'Pending orders',
-    subtitle: 'Work still in the shop. Register a new order here.',
+    subtitle: 'Work still in the shop. Pick today or tomorrow to see what is due.',
     empty: 'No pending orders',
     emptyHint: 'Register a cloth to start the workflow',
   },
   done: {
     title: 'Done orders',
-    subtitle: 'Finished orders, kept off the pending list.',
+    subtitle: 'Finished orders for the date you pick. Starts on today.',
     empty: 'No done orders',
     emptyHint: 'Completed orders will show here',
   },
@@ -164,6 +166,12 @@ const BOARD_COPY: Record<OrderBoard, { title: string; subtitle: string; empty: s
     subtitle: 'Orders with money still due. Call the customer from the row.',
     empty: 'No pending payments',
     emptyHint: 'Orders with a balance will show here',
+  },
+  packed: {
+    title: 'Packed',
+    subtitle: 'Orders packed for pickup. Scan the customer bill to pack or unpack.',
+    empty: 'No packed orders',
+    emptyHint: 'Scan a customer bill and tap Pack order',
   },
 };
 
@@ -242,8 +250,11 @@ function ClothListItem({
   const [doneError, setDoneError] = useState<string | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [packBusy, setPackBusy] = useState(false);
+  const [packError, setPackError] = useState<string | null>(null);
 
   const isDone = cloth.status === 'completed';
+  const packed = orderIsPacked(orderCloths);
 
   function cutterValue(piece: Cloth) {
     return assignDraft[piece.id]?.cutterId ?? piece.cutterId ?? '';
@@ -358,6 +369,19 @@ function ClothListItem({
     }
   }
 
+  async function handleTogglePacked() {
+    setPackBusy(true);
+    setPackError(null);
+    try {
+      await setClothsPacked(orderCloths.map((piece) => piece.id), !packed);
+      await onAssigned();
+    } catch (err) {
+      setPackError(err instanceof Error ? err.message : 'Failed to update pack');
+    } finally {
+      setPackBusy(false);
+    }
+  }
+
   async function handleToggleDone() {
     setDoneBusy(true);
     setDoneError(null);
@@ -398,6 +422,9 @@ function ClothListItem({
               <Phone className="h-3.5 w-3.5" />
               Call
             </a>
+          ) : null}
+          {packed ? (
+            <Badge className="shrink-0 border-done/25 bg-done/10 text-done">Packed</Badge>
           ) : null}
           <Badge className={`shrink-0 ${stage.className}`}>
             {stage.label}
@@ -504,6 +531,16 @@ function ClothListItem({
           <UserCog className="h-3.5 w-3.5" />
           Assign
         </Button>
+        <Button
+          size="sm"
+          variant={packed ? 'primary' : 'secondary'}
+          onClick={() => void handleTogglePacked()}
+          disabled={packBusy}
+          className={packed ? 'bg-done hover:bg-done/90' : undefined}
+        >
+          <Package className="h-3.5 w-3.5" />
+          {packBusy ? 'Saving...' : packed ? 'Unpack' : 'Pack'}
+        </Button>
         <Button size="sm" variant="primary" onClick={() => onManage(cloth)}>
           <Settings2 className="h-3.5 w-3.5" />
           Manage
@@ -546,6 +583,10 @@ function ClothListItem({
 
       {doneError && (
         <p className="mx-4 mb-3 rounded-lg bg-rose-50 px-2 py-1 text-xs text-rose-600">{doneError}</p>
+      )}
+
+      {packError && (
+        <p className="mx-4 mb-3 rounded-lg bg-rose-50 px-2 py-1 text-xs text-rose-600">{packError}</p>
       )}
 
       {assignOpen && (
@@ -690,6 +731,9 @@ export function OrdersPage() {
   const [saving, setSaving] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [phoneSuggestOpen, setPhoneSuggestOpen] = useState(false);
+  const [doneFrom, setDoneFrom] = useState(todayDateString);
+  const [doneTo, setDoneTo] = useState(todayDateString);
+  const [pendingDate, setPendingDate] = useState(todayDateString);
 
   const { types: staffRoleTypes, getLabel: staffTypeLabel } = useStaffTypes();
   const extraStaffTypes = staffRoleTypes.filter((item) => item.slug !== 'cutter' && item.slug !== 'tailor');
@@ -702,13 +746,26 @@ export function OrdersPage() {
     return getOrderRepresentatives(allCloths, allCloths).filter((rep) => {
       const order = getCustomerOrderCloths(rep, allCloths);
       if (!orderMatchesBoard(order, board)) return false;
+      if (board === 'done' && !orderMatchesDateRange(order, doneFrom, doneTo)) return false;
+      if (board === 'pending' && !orderMatchesDeliveryDay(order, pendingDate)) return false;
       if (board === 'all' && statusFilter !== 'all' && !order.some((piece) => piece.status === statusFilter)) {
         return false;
       }
       if (!search.trim()) return true;
       return order.some((piece) => clothMatchesSearch(piece, search));
     });
-  }, [allCloths, board, search, statusFilter]);
+  }, [allCloths, board, search, statusFilter, doneFrom, doneTo, pendingDate]);
+  const doneBusyDays = useMemo(() => {
+    const days = new Set<string>();
+    if (board !== 'done') return days;
+    for (const rep of getOrderRepresentatives(allCloths, allCloths)) {
+      const order = getCustomerOrderCloths(rep, allCloths);
+      if (!orderMatchesBoard(order, 'done')) continue;
+      const day = orderBoardDate(order);
+      if (day) days.add(day);
+    }
+    return days;
+  }, [allCloths, board]);
   const phoneSuggestions = useMemo(
     () => suggestCustomersByPhone(allCloths, form.customerPhone),
     [allCloths, form.customerPhone],
@@ -788,10 +845,6 @@ export function OrdersPage() {
       }
     }
 
-    const pieceCount = totalPiecesFromItems(form.items);
-    const perTotal = splitAmount(orderTotal, pieceCount);
-    const perDiscount = splitAmount(orderDiscount, pieceCount);
-    const perAdvance = splitAmount(parseAmount(form.advanceAmount), pieceCount);
     const phoneResult = normalizeCustomerPhone(form.customerPhone);
     if (!phoneResult.ok) {
       setActionError(phoneResult.error);
@@ -804,13 +857,20 @@ export function OrdersPage() {
     const orderBatchId = crypto.randomUUID();
     try {
       const payloads = [];
+      let billAssigned = false;
+      const usedCodes = [...new Set(allCloths.map((item) => item.code))];
       for (const item of form.items) {
         const garmentType = getGarmentType(item.sizing.garmentType)!;
         const sizeSummary = formatMeasurementsSummary(item.sizing.garmentType, item.sizing.measurements);
         const qty = parseLineQuantity(item.quantity);
+        const lineCode = generateClothCode(usedCodes);
+        usedCodes.push(lineCode);
 
         for (let i = 0; i < qty; i += 1) {
+          const isBillPiece = !billAssigned;
+          billAssigned = true;
           payloads.push({
+            code: lineCode,
             customerName: form.customerName,
             customerPhone: phoneResult.phone,
             garment: garmentDisplayLabel(item.sizing.garmentType, garmentType.label),
@@ -854,9 +914,9 @@ export function OrdersPage() {
                   : null,
               ),
             ].filter((job): job is NonNullable<typeof job> => Boolean(job)),
-            totalAmount: perTotal,
-            discountAmount: perDiscount,
-            advanceAmount: perAdvance,
+            totalAmount: isBillPiece ? orderTotal : 0,
+            discountAmount: isBillPiece ? orderDiscount : 0,
+            advanceAmount: isBillPiece ? parseAmount(form.advanceAmount) : 0,
             givenDate: form.givenDate || todayDateString(),
             deliveryDate: form.deliveryDate.trim() || null,
             cutterExpectedDate: item.cutterExpectedDate.trim() || null,
@@ -964,6 +1024,20 @@ export function OrdersPage() {
           />
         </label>
 
+        {board === 'pending' ? <DeliveryDayPicker value={pendingDate} onChange={setPendingDate} /> : null}
+
+        {board === 'done' ? (
+          <OrderDateFilter
+            from={doneFrom}
+            to={doneTo}
+            busyDays={doneBusyDays}
+            onChange={(nextFrom, nextTo) => {
+              setDoneFrom(nextFrom);
+              setDoneTo(nextTo);
+            }}
+          />
+        ) : null}
+
         {board === 'all' ? (
           <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">
             {CLOTH_FILTER_OPTIONS.map((option) => {
@@ -997,17 +1071,34 @@ export function OrdersPage() {
         <div className="flex items-center justify-between gap-2 border-t border-slate-100 pt-2.5">
           <p className="text-xs font-medium text-slate-500">
             {boardOrders.length} order{boardOrders.length === 1 ? '' : 's'}
+            {board === 'done' ? ` · ${formatOrderDateRange(doneFrom, doneTo)}` : ''}
+            {board === 'pending' ? ` · ${pendingDate ? formatCalendarDate(pendingDate) : 'All dates'}` : ''}
           </p>
-          {search || (board === 'all' && statusFilter !== 'all') ? (
+          {search ||
+          (board === 'all' && statusFilter !== 'all') ||
+          (board === 'done' && (doneFrom !== todayDateString() || doneTo !== todayDateString())) ||
+          (board === 'pending' && pendingDate !== todayDateString()) ? (
             <button
               type="button"
               onClick={() => {
                 setSearch('');
                 setStatusFilter('all');
+                if (board === 'done') {
+                  const today = todayDateString();
+                  setDoneFrom(today);
+                  setDoneTo(today);
+                }
+                if (board === 'pending') {
+                  setPendingDate(todayDateString());
+                }
               }}
               className="text-xs font-semibold text-action active:opacity-70"
             >
-              {board === 'all' && statusFilter !== 'all' ? 'Clear filters' : 'Clear search'}
+              {board === 'done' || board === 'pending'
+                ? 'Back to today'
+                : board === 'all' && statusFilter !== 'all'
+                  ? 'Clear filters'
+                  : 'Clear search'}
             </button>
           ) : null}
         </div>
@@ -1015,9 +1106,23 @@ export function OrdersPage() {
 
       {boardOrders.length === 0 ? (
         <Card className="py-10 text-center">
-          <p className="font-medium text-slate-700">{search ? 'No orders match this search' : copy.empty}</p>
+          <p className="font-medium text-slate-700">
+            {search
+              ? 'No orders match this search'
+              : board === 'done'
+                ? `No done orders · ${formatOrderDateRange(doneFrom, doneTo)}`
+                : board === 'pending'
+                  ? `No pending orders · ${pendingDate ? formatCalendarDate(pendingDate) : 'All dates'}`
+                  : copy.empty}
+          </p>
           <p className="mt-1 text-sm text-slate-500">
-            {search ? 'Try another name, mobile, or order number' : copy.emptyHint}
+            {search
+              ? 'Try another name, mobile, or order number'
+              : board === 'done'
+                ? 'Pick another day or a date range on the calendar.'
+                : board === 'pending'
+                  ? 'Pick today, tomorrow, or another delivery date.'
+                  : copy.emptyHint}
           </p>
         </Card>
       ) : (
@@ -1524,7 +1629,8 @@ export function OrdersPage() {
 
             <p className="text-xs text-slate-500">
               Qty 2 of the same cloth prints as one staff ticket. Different cloths, staff, or special
-              notes still print separately. Customer payment is split evenly across pieces.
+              notes still print separately. The total below is for the whole order — set each cloth’s
+              price later in Manage if you need it.
             </p>
           </div>
 

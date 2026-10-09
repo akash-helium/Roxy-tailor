@@ -75,6 +75,20 @@ export function escPosText(value: string) {
   return Uint8Array.from(chars);
 }
 
+function escPosExact(value: string) {
+  const chars: number[] = [];
+  for (const char of value) {
+    const code = char.charCodeAt(0);
+    chars.push(code >= 32 && code <= 126 ? code : 63);
+  }
+  return Uint8Array.from(chars);
+}
+
+function padEscPosSides(left: string, right: string, width = 42) {
+  const gap = Math.max(1, width - left.length - right.length);
+  return `${left}${' '.repeat(gap)}${right}`;
+}
+
 /** 1-bit canvas → GS v 0 raster (exact 203 DPI bars, no GDI dithering). */
 export function canvasToEscPosRaster(canvas: HTMLCanvasElement) {
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
@@ -165,20 +179,27 @@ export type EscPosTicket = {
   raster: Uint8Array;
   headerRaster?: Uint8Array;
   footer?: string;
+  afterBarcodeLines?: string[];
   /** Staff tickets: scan code after the date/order header. Customer bills: after totals. */
   barcodePlacement?: 'middle' | 'end';
+  bold?: boolean;
 };
 
 export function buildEscPosTicket(ticket: EscPosTicket) {
+  const boldOn = ticket.bold !== false;
   const chunks: Uint8Array[] = [
     bytes(ESC, 0x40),
-    bytes(ESC, 0x45, 1),
+    bytes(ESC, 0x45, boldOn ? 1 : 0),
     bytes(ESC, 0x61, 1),
   ];
 
+  if ((ticket.barcodePlacement ?? 'end') === 'middle') {
+    chunks.push(bytes(ESC, 0x33, 0), bytes(ESC, 0x65, 4));
+  }
+
   if (ticket.headerRaster && ticket.headerRaster.length > 8) {
     chunks.push(ticket.headerRaster, bytes(LF));
-  } else {
+  } else if (ticket.title.trim()) {
     chunks.push(bytes(GS, 0x21, 0x11), escPosText(ticket.title), bytes(LF), bytes(GS, 0x21, 0x00));
   }
 
@@ -191,11 +212,40 @@ export function buildEscPosTicket(ticket: EscPosTicket) {
         chunks.push(bytes(LF));
         continue;
       }
+      if (trimmed.startsWith('!!SIDES ')) {
+        const payload = trimmed.slice('!!SIDES '.length);
+        const tab = payload.indexOf('\t');
+        const left = toEscPosAscii(tab >= 0 ? payload.slice(0, tab) : payload);
+        const right = toEscPosAscii(tab >= 0 ? payload.slice(tab + 1) : '');
+        chunks.push(bytes(ESC, 0x61, 0), escPosExact(padEscPosSides(left, right)), bytes(LF));
+        continue;
+      }
       if (trimmed.startsWith('!!PENDING ')) {
-        const amount = trimmed.slice('!!PENDING '.length);
+        const payload = trimmed.slice('!!PENDING '.length);
         chunks.push(bytes(GS, 0x21, 0x11), bytes(ESC, 0x45, 1));
-        chunks.push(escPosText(`Pending  ${amount}`), bytes(LF));
-        chunks.push(bytes(GS, 0x21, 0x00), bytes(ESC, 0x45, 1));
+        for (const wrapped of wrapEscPosLine(payload, 21)) {
+          chunks.push(escPosText(wrapped), bytes(LF));
+        }
+        chunks.push(bytes(GS, 0x21, 0x00), bytes(ESC, 0x45, boldOn ? 1 : 0));
+        continue;
+      }
+      if (trimmed.startsWith('!!BIGSIDES ')) {
+        const payload = trimmed.slice('!!BIGSIDES '.length);
+        const tab = payload.indexOf('\t');
+        const left = toEscPosAscii(tab >= 0 ? payload.slice(0, tab) : payload);
+        const right = toEscPosAscii(tab >= 0 ? payload.slice(tab + 1) : '');
+        chunks.push(bytes(GS, 0x21, 0x11), bytes(ESC, 0x45, 1), bytes(ESC, 0x61, 0));
+        chunks.push(escPosExact(padEscPosSides(left.slice(0, 20), right.slice(0, 20), 21)), bytes(LF));
+        chunks.push(bytes(GS, 0x21, 0x00), bytes(ESC, 0x45, boldOn ? 1 : 0));
+        continue;
+      }
+      if (trimmed.startsWith('!!BIG ')) {
+        const payload = trimmed.slice('!!BIG '.length);
+        chunks.push(bytes(GS, 0x21, 0x11), bytes(ESC, 0x45, 1), bytes(ESC, 0x61, 0));
+        for (const wrapped of wrapEscPosLine(payload, 21)) {
+          chunks.push(escPosText(wrapped), bytes(LF));
+        }
+        chunks.push(bytes(GS, 0x21, 0x00), bytes(ESC, 0x45, boldOn ? 1 : 0));
         continue;
       }
       if (trimmed.startsWith('!!ITEM ')) {
@@ -215,14 +265,26 @@ export function buildEscPosTicket(ticket: EscPosTicket) {
   };
 
   const pushBarcode = () => {
-    chunks.push(bytes(LF), bytes(ESC, 0x61, 1), ticket.raster, bytes(LF));
-    chunks.push(bytes(GS, 0x21, 0x11), escPosText(ticket.barcodeValue), bytes(LF), bytes(GS, 0x21, 0x00));
+    chunks.push(bytes(ESC, 0x61, 1), ticket.raster, bytes(LF));
+    chunks.push(bytes(GS, 0x21, 0x00), bytes(ESC, 0x45, boldOn ? 1 : 0), escPosText(ticket.barcodeValue), bytes(LF));
     chunks.push(bytes(ESC, 0x61, 0));
   };
 
   pushLines(ticket.headerLines ?? []);
   if ((ticket.barcodePlacement ?? 'end') === 'middle') pushBarcode();
   pushLines(ticket.lines);
+
+  if ((ticket.barcodePlacement ?? 'end') === 'end') pushBarcode();
+
+  const afterLines = ticket.afterBarcodeLines ?? [];
+  if (afterLines.length > 0) {
+    chunks.push(bytes(ESC, 0x61, 0), bytes(GS, 0x21, 0x00), bytes(ESC, 0x45, boldOn ? 1 : 0));
+    for (const line of afterLines) {
+      for (const wrapped of wrapEscPosLine(line, 42)) {
+        chunks.push(escPosText(wrapped), bytes(LF));
+      }
+    }
+  }
 
   if (ticket.footer) {
     chunks.push(bytes(LF), bytes(ESC, 0x61, 1));
@@ -232,9 +294,7 @@ export function buildEscPosTicket(ticket: EscPosTicket) {
     chunks.push(bytes(ESC, 0x61, 0));
   }
 
-  if ((ticket.barcodePlacement ?? 'end') === 'end') pushBarcode();
-
-  chunks.push(bytes(LF, LF), bytes(GS, 0x56, 0x41, 0x18));
+  chunks.push(bytes(LF, LF, LF, LF, LF), bytes(GS, 0x56, 0x41, 0x40));
   return concat(...chunks);
 }
 

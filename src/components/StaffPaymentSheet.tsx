@@ -15,15 +15,18 @@ import { formatCalendarDate, generateId, todayDateString } from '../lib/utils';
 import { jobForStaff, jobsFromLegacyColumns, upsertStaffJob } from '../lib/staff-jobs';
 import {
   allocatePayout,
+  payoutClothCodes,
   payoutProductLine,
   selectedLineDue,
   staffPayRoleLine,
   staffWorkGroups,
+  workLineCodes,
   workLineQtyCopy,
 } from '../lib/staff-ledger';
 import { sortStaffPayouts } from '../lib/staff-payouts';
 import { useStaffTypes } from '../contexts/StaffTypesContext';
 import { useAndroidBackHandler } from '../hooks/useAndroidBackHandler';
+import { StaffWorkBoard } from './StaffWorkBoard';
 import { Button, Input, Textarea, showToast } from './ui';
 
 function StaffPayForm({
@@ -187,7 +190,11 @@ export function StaffLedgerPanel({
         date: date.trim() || todayDateString(),
         note: note.trim() || undefined,
         clothIds: line.clothIds,
-        productLabel: `${line.group.label} · ${line.group.customerName}`,
+        productLabel: `${line.group.label} · ${line.group.customerName}${
+          line.piecePays.map((row) => row.cloth.code).filter(Boolean).length
+            ? ` · ${line.piecePays.map((row) => row.cloth.code).filter(Boolean).join(' · ')}`
+            : ''
+        }`,
         qty: line.qty,
         rate: line.rate,
       }));
@@ -295,6 +302,11 @@ export function StaffLedgerPanel({
                       <span>
                         <span className="block font-semibold text-slate-900">{group.label}</span>
                         <span className="block text-sm text-slate-600">{group.customerName}</span>
+                        {workLineCodes(group) ? (
+                          <span className="mt-0.5 block font-mono text-xs font-semibold tracking-wide text-ink">
+                            {workLineCodes(group)}
+                          </span>
+                        ) : null}
                       </span>
                       {!group.needsRate ? (
                         <span className="shrink-0 font-semibold tabular-nums text-slate-900">
@@ -401,6 +413,11 @@ export function StaffLedgerPanel({
               <div className="min-w-0">
                 <p className="font-semibold text-slate-900">{formatCurrency(payout.amount)}</p>
                 <p className="text-sm text-slate-700">{payoutProductLine(payout)}</p>
+                {payoutClothCodes(payout, assigned) ? (
+                  <p className="font-mono text-xs font-semibold tracking-wide text-ink">
+                    {payoutClothCodes(payout, assigned)}
+                  </p>
+                ) : null}
                 <p className="text-xs text-slate-500">
                   {formatCalendarDate(payout.date || null)}
                   {payout.rate ? ` · ${formatCurrency(payout.rate)} each` : ''}
@@ -441,6 +458,7 @@ export function StaffLedgerPanel({
         </div>
       </div>
       <p className="text-xs text-slate-500">Still due is work not paid yet.</p>
+      <StaffWorkBoard key={liveStaff.id} staff={liveStaff} cloths={cloths} />
       <div className={layout === 'split' ? 'grid gap-6 lg:grid-cols-2' : 'space-y-4'}>
         <div className="rounded-[14px] border border-action/20 bg-action/5 p-4">{payForm}</div>
         <div className="rounded-2xl border border-slate-200 bg-slate-50/60 p-4">{history}</div>

@@ -1,8 +1,15 @@
 import type { Cloth, Staff } from '../types';
-import { summarizeCustomerOrder, groupClothsForCustomerBill, customerBillItemLabel, staffTicketTitle } from './customer-order';
+import { BILL_POLICY_NOTE, SHOP_ADDRESS, SHOP_PHONE } from './app-config';
+import {
+  summarizeCustomerOrder,
+  groupClothsForCustomerBill,
+  customerBillSlipName,
+  customerBillClothNos,
+  staffTicketTitle,
+} from './customer-order';
 import { formatCurrency } from './payments';
 import { formatCalendarDate, IN_GROUP_TICKET_LINE } from './utils';
-import { listFilledMeasurements, pairMeasurementRows, type MeasurementCell } from './measurements';
+import { listFilledMeasurements, type MeasurementCell } from './measurements';
 
 export function formatPrintDateTime(date: Date = new Date()) {
   return date.toLocaleString('en-IN', {
@@ -20,6 +27,8 @@ export function staffTicketNotes(cloths: Cloth[]) {
 
 export const PENDING_TICKET_PREFIX = '!!PENDING ';
 export const STAFF_ITEM_PREFIX = '!!ITEM ';
+export const BIG_TICKET_PREFIX = '!!BIG ';
+export const BIG_SIDES_PREFIX = '!!BIGSIDES ';
 
 export type StaffTicketView = {
   dateLabel: string;
@@ -29,6 +38,7 @@ export type StaffTicketView = {
   qty: number;
   measurements: MeasurementCell[];
   customerName: string;
+  customerPhone: string;
   cutterName: string;
   tailorName: string;
   givenDate: string;
@@ -47,7 +57,7 @@ export function buildStaffTicketView(
   if (!primary) return null;
 
   return {
-    dateLabel: primary.givenDate ? formatCalendarDate(primary.givenDate) : '',
+    dateLabel: primary.deliveryDate ? formatCalendarDate(primary.deliveryDate) : '',
     orderNumber: (primary.orderCode || primary.code || '').trim(),
     pieceCode: (primary.code || '').trim(),
     garmentTitle: staffTicketTitle(cloths),
@@ -58,6 +68,7 @@ export function buildStaffTicketView(
       primary.size,
     ),
     customerName: primary.customerName,
+    customerPhone: primary.customerPhone?.trim() ?? '',
     cutterName: options?.cutter?.name?.trim() ?? '',
     tailorName: options?.tailor?.name?.trim() ?? '',
     givenDate: primary.givenDate ? formatCalendarDate(primary.givenDate) : '',
@@ -69,22 +80,16 @@ export function buildStaffTicketView(
   };
 }
 
-function padSides(left: string, right: string, width = 42) {
-  const gap = Math.max(1, width - left.length - right.length);
-  return `${left}${' '.repeat(gap)}${right}`;
+function measurementLine(cell: MeasurementCell) {
+  return `${cell.label} - ${cell.value}`.trim();
 }
 
-function measurementLine(left: MeasurementCell, right: MeasurementCell | null, width = 42) {
-  const col = Math.floor(width / 2);
-  const format = (cell: MeasurementCell) => `${cell.label} ${cell.value}`.trim();
-  const leftText = format(left).slice(0, col).padEnd(col);
-  return right ? `${leftText}${format(right)}`.trimEnd() : leftText.trimEnd();
-}
+export const STAFF_SIDES_PREFIX = '!!SIDES ';
 
 export function buildStaffTicketHeaderLines(cloths: Cloth[]) {
   const view = buildStaffTicketView(cloths);
   if (!view) return [];
-  return [padSides(view.dateLabel || '—', view.orderNumber || '—')];
+  return [`${STAFF_SIDES_PREFIX}${view.dateLabel || '—'}\t${view.orderNumber || '—'}`];
 }
 
 export function buildStaffTicketLines(
@@ -95,19 +100,13 @@ export function buildStaffTicketLines(
   if (!view) return [];
 
   const lines: string[] = [];
-  if (view.garmentTitle) lines.push(`${STAFF_ITEM_PREFIX}${view.garmentTitle}`);
-  for (const [left, right] of pairMeasurementRows(view.measurements)) {
-    lines.push(measurementLine(left, right));
+  if (view.customerName) lines.push(`${BIG_TICKET_PREFIX}Customer Name - ${view.customerName}`);
+  if (view.customerPhone) lines.push(`${BIG_TICKET_PREFIX}Contact No - ${view.customerPhone}`);
+  if (view.garmentTitle) lines.push(`${BIG_TICKET_PREFIX}${view.garmentTitle}`);
+  for (const cell of view.measurements) {
+    lines.push(measurementLine(cell));
   }
-  lines.push('');
-  if (view.customerName) lines.push(view.customerName);
-  if (view.qty > 1) lines.push(`Qty ${view.qty}`);
-  if (view.cutterName) lines.push(`Cutter: ${view.cutterName}`);
-  if (view.tailorName) lines.push(`Tailor: ${view.tailorName}`);
-  if (view.deliveryDate) lines.push(`Delivery: ${view.deliveryDate}`);
-  if (view.cutterBy) lines.push(`Cutter by: ${view.cutterBy}`);
-  if (view.tailorBy) lines.push(`Tailor by: ${view.tailorBy}`);
-  if (view.notes) lines.push(`Note: ${view.notes}`);
+  lines.push(`Note - ${view.notes || ''}`);
   if (view.inGroup) {
     lines.push('');
     lines.push(IN_GROUP_TICKET_LINE);
@@ -115,28 +114,37 @@ export function buildStaffTicketLines(
   return lines;
 }
 
-export function buildCustomerBillTicketLines(cloths: Cloth[], printedAt = new Date()) {
+export function buildCustomerBillAfterBarcodeLines() {
+  return [`Add- ${SHOP_ADDRESS}`, BILL_POLICY_NOTE];
+}
+
+export function buildCustomerBillTicketLines(cloths: Cloth[], _printedAt = new Date()) {
   const summary = summarizeCustomerOrder(cloths);
-  const lines: string[] = [
-    `Customer: ${summary.customerName}`,
-    `Printed: ${formatPrintDateTime(printedAt)}`,
-  ];
-  if (summary.givenDate) lines.push(`Order date: ${formatCalendarDate(summary.givenDate)}`);
-  if (summary.deliveryDate) lines.push(`Delivery: ${formatCalendarDate(summary.deliveryDate)}`);
-  lines.push(`Bill: ${summary.orderCode || summary.codes[0] || '—'}`);
+  const orderNo = summary.orderCode || summary.codes[0] || '—';
+  const delivery = summary.deliveryDate ? formatCalendarDate(summary.deliveryDate) : '—';
+  const lines: string[] = [];
+
+  if (SHOP_PHONE) lines.push(`Contact No - ${SHOP_PHONE}`);
+  lines.push(`${STAFF_SIDES_PREFIX}Delivery Date\tOrder No`);
+  lines.push(`${BIG_SIDES_PREFIX}${delivery}\t${orderNo}`);
+  lines.push('');
+  lines.push(`${BIG_TICKET_PREFIX}Name - ${summary.customerName}`);
+  if (summary.customerPhone) lines.push(`Contact No - ${summary.customerPhone}`);
+  lines.push(`Booking Date - ${summary.givenDate ? formatCalendarDate(summary.givenDate) : '—'}`);
   lines.push('');
   groupClothsForCustomerBill(cloths).forEach((item, index) => {
-    lines.push(`${index + 1}. ${customerBillItemLabel(item)}`);
+    const left = `${index + 1}. ${customerBillSlipName(item)}`;
+    const right = customerBillClothNos(item);
+    if (right) lines.push(`${STAFF_SIDES_PREFIX}${left}\t${right}`);
+    else lines.push(left);
   });
-  lines.push('');
-  lines.push(`Total: ${formatCurrency(summary.totalBill - summary.totalDiscount)}`);
-  lines.push(`Advance: ${formatCurrency(summary.totalAdvance)}`);
+  lines.push('-'.repeat(42));
+  lines.push(`${STAFF_SIDES_PREFIX}Total Amount\t${formatCurrency(summary.totalBill - summary.totalDiscount)}`);
+  lines.push(`${STAFF_SIDES_PREFIX}Advance\t${formatCurrency(summary.totalAdvance)}`);
   if (summary.totalPart > 0) {
-    lines.push(`Part paid: ${formatCurrency(summary.totalPart)}`);
+    lines.push(`${STAFF_SIDES_PREFIX}Part paid\t${formatCurrency(summary.totalPart)}`);
   }
-  lines.push(`${PENDING_TICKET_PREFIX}${formatCurrency(summary.totalPending)}`);
-  if (summary.notes) lines.push(`Note: ${summary.notes}`);
-  lines.push('');
-  lines.push('Thank you. Keep this bill for pickup.');
+  lines.push(`${BIG_SIDES_PREFIX}Pending\t${formatCurrency(summary.totalPending)}`);
+  if (summary.notes) lines.push(`Note - ${summary.notes}`);
   return lines;
 }

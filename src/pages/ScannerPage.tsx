@@ -1,30 +1,32 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
-import { Camera, ChevronLeft, ChevronRight, Hash, ScanLine } from 'lucide-react';
+import { Camera, ChevronLeft, ChevronRight, Hash, Package, ScanLine } from 'lucide-react';
 import { ensureCameraAccess } from '../lib/camera-permissions';
 import {
   getClothByCode,
   getStaffByType,
   listClothsByOrderCode,
+  setClothsPacked,
 } from '../lib/data';
 import { useAndroidBackHandler } from '../hooks/useAndroidBackHandler';
 import { useAppData } from '../hooks/useAppData';
 import { useHardwareScannerBusOptional, refocusScannerCapture } from '../contexts/HardwareScannerContext';
 import { isDesktopApp, supportsCameraScanner, supportsHardwareScanner } from '../lib/platform';
 import { isScanTerminatorKey, normalizeScannerBarcode } from '../lib/scanner-input';
+import { CustomerOrderProgress } from '../components/CustomerOrderProgress';
 import { PaymentDashboard } from '../components/PaymentDashboard';
 import { ScanBasketPanel } from '../components/ScanBasketPanel';
+import { DeliveryDayPicker } from '../components/DeliveryDayPicker';
 import { type Cloth } from '../types';
 import { orderStageBadge } from '../lib/cloth-status';
-import { Badge, Button, Card, Input, Modal, PageHeader, showToast } from '../components/ui';
+import { Badge, Button, Card, Modal, PageHeader, showToast } from '../components/ui';
 import { formatCalendarDate, isPastDue, todayDateString, clothBillName } from '../lib/utils';
 import {
   getCustomerOrderCloths,
   getOrderRepresentatives,
+  orderIsPacked,
   summarizeCustomerOrder,
-  groupClothsForCustomerBill,
-  customerBillItemLabel,
 } from '../lib/customer-order';
 import { formatCurrency } from '../lib/payments';
 import { ClothManageSheet } from '../components/ClothManageSheet';
@@ -40,8 +42,6 @@ import {
   type ScanBasketKind,
 } from '../lib/scan-basket';
 import {
-  clothDoneOnDay,
-  clothMatchesShopDate,
   filterShopCloths,
   shopStaffLoads,
   shopWorkCounts,
@@ -186,6 +186,7 @@ export function ScannerPage() {
   const [basketIds, setBasketIds] = useState<string[]>([]);
   const [customerOrderIds, setCustomerOrderIds] = useState<string[]>([]);
   const [manageFromScan, setManageFromScan] = useState<Cloth | null>(null);
+  const [packBusy, setPackBusy] = useState(false);
   const basketIdsRef = useRef<string[]>([]);
   const sessionKindRef = useRef<ScanBasketKind | null>(null);
   const handleScanRef = useRef<(code: string) => Promise<void>>(async () => {});
@@ -201,13 +202,6 @@ export function ScannerPage() {
   const filteredHomeCloths = useMemo(() => {
     if (homeStage === 'all') {
       return homeDate ? todayBoard.pieces : cloths;
-    }
-    if (homeStage === 'done' && homeDate) {
-      return cloths.filter(
-        (cloth) =>
-          cloth.status === 'completed' &&
-          (clothDoneOnDay(cloth, homeDate) || clothMatchesShopDate(cloth, homeDate)),
-      );
     }
     return [...filterShopCloths(cloths, homeStage, homeDate)].sort(
       (a, b) =>
@@ -229,6 +223,7 @@ export function ScannerPage() {
       .filter((item): item is Cloth => Boolean(item));
   }, [customerOrderIds, cloths]);
   const customerBill = useMemo(() => summarizeCustomerOrder(customerOrder), [customerOrder]);
+  const customerPacked = orderIsPacked(customerOrder);
   const manageClothLive =
     manageFromScan && (cloths.find((item) => item.id === manageFromScan.id) ?? manageFromScan);
 
@@ -449,9 +444,28 @@ export function ScannerPage() {
     setBasketIds([]);
     setCustomerOrderIds([]);
     setManageFromScan(null);
+    setPackBusy(false);
     sessionKindRef.current = null;
     setStep('idle');
     refocusScannerCapture();
+  }
+
+  async function handleTogglePacked() {
+    if (customerOrder.length === 0 || packBusy) return;
+    setPackBusy(true);
+    setActionError(null);
+    try {
+      await setClothsPacked(
+        customerOrder.map((item) => item.id),
+        !customerPacked,
+      );
+      await refetch();
+      showToast(customerPacked ? 'Order unpacked' : 'Order packed');
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Failed to update pack');
+    } finally {
+      setPackBusy(false);
+    }
   }
 
   function handleBasketChange(next: Cloth[]) {
@@ -542,30 +556,15 @@ export function ScannerPage() {
                     ? `${todayBoard.due.length} due · ${todayBoard.done.length} done${
                         todayBoard.overdue.length ? ` · ${todayBoard.overdue.length} overdue` : ''
                       }`
-                    : `${getOrderRepresentatives(filteredHomeCloths, cloths).length} orders`}
+                    : `${getOrderRepresentatives(filteredHomeCloths, cloths).length} orders${
+                        homeDate ? ` · ${formatCalendarDate(homeDate)}` : ''
+                      }`}
                 </p>
               </div>
             </div>
             <Card className="p-4">
-              <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-                <div className="flex flex-wrap items-end gap-2">
-                  <div className="w-[11.5rem]">
-                    <Input
-                      label="Date"
-                      type="date"
-                      value={homeDate}
-                      onChange={(event) => setHomeDate(event.target.value)}
-                    />
-                  </div>
-                  <Button type="button" variant="secondary" onClick={() => setHomeDate(todayDateString())}>
-                    Today
-                  </Button>
-                  {homeDate ? (
-                    <Button type="button" variant="ghost" onClick={() => setHomeDate('')}>
-                      All dates
-                    </Button>
-                  ) : null}
-                </div>
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+                <DeliveryDayPicker value={homeDate} onChange={setHomeDate} />
                 <div className="flex flex-wrap gap-1.5">
                   {HOME_STAGE_FILTERS.map((item) => {
                     const active = homeStage === item.id;
@@ -592,9 +591,9 @@ export function ScannerPage() {
                   pieces={filteredHomeCloths}
                   allCloths={cloths}
                   empty={
-                    homeStage === 'all' && homeDate
-                      ? 'Nothing due or done on this date.'
-                      : 'No orders match this date or type.'
+                    homeDate
+                      ? `No orders with delivery ${formatCalendarDate(homeDate)}.`
+                      : 'No orders match this type.'
                   }
                   onOpen={(code) => void handleScan(code)}
                 />
@@ -782,21 +781,24 @@ export function ScannerPage() {
       >
         <div className="space-y-4">
           <div>
-            <p className="font-display text-lg font-semibold text-ink">{customerBill.customerName}</p>
+            <div className="flex items-start justify-between gap-3">
+              <p className="font-display text-lg font-semibold text-ink">{customerBill.customerName}</p>
+              <div className="flex shrink-0 flex-wrap justify-end gap-1.5">
+                {customerPacked ? (
+                  <Badge className="border-done/25 bg-done/10 text-done">Packed</Badge>
+                ) : null}
+                <Badge className={orderStageBadge(customerOrder).className}>
+                  {orderStageBadge(customerOrder).label}
+                </Badge>
+              </div>
+            </div>
             <p className="text-sm text-ink-muted">
               {customerBill.pieceCount} {customerBill.pieceCount === 1 ? 'cloth' : 'cloths'}
               {customerBill.givenDate ? ` · Order ${formatCalendarDate(customerBill.givenDate)}` : ''}
               {customerBill.deliveryDate ? ` · Delivery ${formatCalendarDate(customerBill.deliveryDate)}` : ''}
             </p>
           </div>
-          <div className="space-y-2 border-t border-seam pt-3">
-            {groupClothsForCustomerBill(customerOrder).map((item, index) => (
-              <p key={`${item.name}-${index}`} className="text-sm font-semibold text-ink">
-                <span className="me-1.5 text-ink-muted">{index + 1}.</span>
-                {customerBillItemLabel(item)}
-              </p>
-            ))}
-          </div>
+          <CustomerOrderProgress cloths={customerOrder} staff={staff} />
           <div className="grid grid-cols-2 gap-3 rounded-[14px] border border-seam bg-white p-4">
             <div>
               <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-muted">Total</p>
@@ -830,6 +832,15 @@ export function ScannerPage() {
               <strong className="text-ink">Note:</strong> {customerBill.notes}
             </p>
           ) : null}
+          <Button
+            className={`w-full rounded-full py-3 ${customerPacked ? 'bg-done hover:bg-done/90' : ''}`}
+            variant={customerPacked ? 'primary' : 'secondary'}
+            disabled={packBusy}
+            onClick={() => void handleTogglePacked()}
+          >
+            <Package className="h-4 w-4" />
+            {packBusy ? 'Saving…' : customerPacked ? 'Unpack order' : 'Pack order'}
+          </Button>
           <Button
             className="w-full rounded-full py-3"
             onClick={() => setManageFromScan(customerOrder[0] ?? null)}

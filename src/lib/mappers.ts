@@ -77,6 +77,7 @@ export function mapCloth(row: ClothRow): Cloth {
     deliveryDate: checks.deliveryDate || null,
     cutterExpectedDate: row.cutter_expected_date ?? row.expected_date ?? null,
     tailorExpectedDate: row.tailor_expected_date ?? null,
+    packed: Boolean(row.packed) || checks.packed,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

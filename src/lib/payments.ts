@@ -35,6 +35,28 @@ export function parseAmount(value: string) {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
 }
 
+/** Split rupees across pieces so the parts still add up to the original amount. */
+export function splitAmountAcross(amount: number, parts: number): number[] {
+  if (parts <= 0) return [];
+  const cents = Math.round(amount * 100);
+  const base = Math.floor(cents / parts);
+  const extra = cents - base * parts;
+  return Array.from({ length: parts }, (_, index) => (base + (index >= parts - extra ? 1 : 0)) / 100);
+}
+
+export function mergeOrderPartPayments(cloths: Cloth[]): DatedAmount[] {
+  const byDate = new Map<string, number>();
+  for (const cloth of cloths) {
+    for (const item of clothPartPayments(cloth)) {
+      const key = item.date || '';
+      byDate.set(key, (byDate.get(key) ?? 0) + item.amount);
+    }
+  }
+  return [...byDate.entries()]
+    .map(([date, amount]) => ({ date, amount }))
+    .filter((item) => item.amount > 0);
+}
+
 export function parsePartPaymentDrafts(values: { amount: string; date: string }[]) {
   return values
     .map((item) => ({ amount: parseAmount(item.amount), date: item.date.trim() }))

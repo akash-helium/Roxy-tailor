@@ -9,13 +9,11 @@ import { exportBarcodeForNative, isNativeApp } from '../lib/barcode-export';
 import { printBillHtml } from '../lib/bill-export';
 import { canPrintThermal, printThermalTicket } from '../lib/thermal-print';
 import { clothBarcodeLabel, IN_GROUP_TICKET_LABEL } from '../lib/utils';
-import { buildStaffTicketHeaderLines, buildStaffTicketLines, buildStaffTicketView } from '../lib/print-ticket';
+import { buildStaffTicketLines, buildStaffTicketView } from '../lib/print-ticket';
 import { getLogoDataUrl } from '../lib/logo';
 import { useAndroidBackHandler } from '../hooks/useAndroidBackHandler';
 import { groupClothsForStaffTickets, staffTicketTitle } from '../lib/customer-order';
-import { pairMeasurementRows } from '../lib/measurements';
 import { Button } from './ui';
-import { BrandLogo } from './BrandLogo';
 
 function downloadInBrowser(dataUrl: string, code: string) {
   const a = document.createElement('a');
@@ -136,7 +134,8 @@ export function BarcodePrintSheet({
       try {
         const result = await printThermalTicket({
           barcodeValue,
-          headerLines: buildStaffTicketHeaderLines(ticketPieces),
+          dateLabel: ticket?.dateLabel || '',
+          orderNumber: ticket?.orderNumber || '',
           lines: buildStaffTicketLines(ticketPieces, { cutter, tailor }),
           barcodePlacement: 'middle',
         });
@@ -165,10 +164,15 @@ export function BarcodePrintSheet({
         for (let index = 0; index < groups.length; index += 1) {
           const group = groups[index]!;
           const piece = group[0]!;
+          const view = buildStaffTicketView(group, {
+            cutter: getStaffById(staff, piece.cutterId),
+            tailor: getStaffById(staff, piece.tailorId),
+          });
           setItemIndex(index);
           const result = await printThermalTicket({
             barcodeValue: piece.code,
-            headerLines: buildStaffTicketHeaderLines(group),
+            dateLabel: view?.dateLabel || '',
+            orderNumber: view?.orderNumber || '',
             lines: buildStaffTicketLines(group, {
               cutter: getStaffById(staff, piece.cutterId),
               tailor: getStaffById(staff, piece.tailorId),
@@ -288,112 +292,65 @@ export function BarcodePrintSheet({
         className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-4"
         style={{ paddingBottom: 'max(24px, var(--app-safe-bottom, 0px))' }}
       >
-        <div className="mx-auto w-full max-w-sm rounded-[14px] border-2 border-dashed border-action/25 bg-white p-4 text-start">
-          <BrandLogo size={40} className="mx-auto mb-3 h-10 w-10 rounded-lg" />
+        <div className="mx-auto w-full max-w-sm rounded-[14px] border-2 border-dashed border-action/25 bg-white px-4 pb-4 pt-1 text-start">
           {error && <p className="mb-2 text-center text-sm text-rose-600">{error}</p>}
           {status && <p className="mb-2 text-center text-sm text-emerald-600">{status}</p>}
-          <div className="mb-3 flex items-start justify-between gap-3">
-            <p className="text-sm font-bold text-ink">{ticket?.dateLabel || '—'}</p>
-            <p className="font-mono text-sm font-bold tracking-wide text-ink">
-              {ticket?.orderNumber || barcodeValue}
-            </p>
+          <div className="mb-1 flex items-start justify-between gap-2">
+            <div className="min-w-0 flex-1">
+              <p className="text-[10px] font-medium text-ink">Delivery Date</p>
+              <p className="text-base font-bold leading-tight text-ink">
+                {ticket?.dateLabel || '—'}
+              </p>
+            </div>
+            <div className="flex h-10 w-32 shrink-0 flex-col items-center">
+              {!error && !barcodeUrl && barcodeValue && (
+                <p className="animate-pulse text-center text-xs text-slate-500">Generating…</p>
+              )}
+              {(screenBarcodeUrl || barcodeUrl) && (
+                <img
+                  src={screenBarcodeUrl ?? barcodeUrl ?? ''}
+                  alt={`Barcode for ${barcodeValue}`}
+                  className="block h-10 w-full bg-white object-contain"
+                  style={{ imageRendering: 'pixelated' }}
+                  draggable={false}
+                />
+              )}
+            </div>
+            <div className="min-w-0 flex-1 text-right">
+              <p className="text-[10px] font-medium text-ink">Order No</p>
+              <p className="font-mono text-base font-bold leading-tight tracking-wide text-ink">
+                {ticket?.orderNumber || barcodeValue}
+              </p>
+            </div>
           </div>
-          {!error && !barcodeUrl && barcodeValue && (
-            <p className="animate-pulse text-center text-sm text-slate-500">Generating barcode...</p>
-          )}
-          {(screenBarcodeUrl || barcodeUrl) && (
-            <img
-              src={screenBarcodeUrl ?? barcodeUrl ?? ''}
-              alt={`Barcode for ${barcodeValue}`}
-              className="mx-auto mb-2 block w-[180px] bg-white"
-              style={{ imageRendering: 'pixelated' }}
-              draggable={false}
-            />
-          )}
-          <p className="mb-3 text-center font-display text-2xl font-semibold tracking-wider text-ink">
+          <p className="mb-3 text-center font-mono text-sm font-medium tracking-wide text-ink">
             {barcodeValue}
           </p>
-          <p className="mb-3 px-1 text-center text-[11px] leading-snug text-slate-500">
-            QuickScan WL2 is a <strong>laser</strong> — it reads the <strong>printed 80mm ticket</strong>,
-            not this screen. Print on the TVS RP 3200 LITE, then hold the scanner 5–15 cm away with
-            the red line across the full bars.
+          <p className="text-lg font-bold leading-snug text-ink">
+            Customer Name - {ticket?.customerName || ''}
+          </p>
+          <p className="mt-1 text-lg font-bold leading-snug text-ink">
+            Contact No - {ticket?.customerPhone || ''}
           </p>
           {ticket?.garmentTitle ? (
-            <p className="mb-3 text-sm font-black tracking-wide text-ink">
+            <p className="mt-3 mb-2 text-xl font-bold underline decoration-2 underline-offset-2 text-ink">
               {ticket.garmentTitle}
             </p>
           ) : null}
           {ticket && ticket.measurements.length > 0 ? (
-            <table className="mb-3 w-full table-fixed border-collapse text-left">
-              <tbody>
-                {pairMeasurementRows(ticket.measurements).map(([left, right], index) => (
-                  <tr key={`${left.label}-${index}`}>
-                    <th className="w-[22%] border border-ink px-2 py-1.5 text-[10px] font-bold uppercase tracking-wide text-ink">
-                      {left.label}
-                    </th>
-                    <td className="w-[28%] border border-ink px-2 py-1.5 text-sm font-black text-ink">
-                      {left.value}
-                    </td>
-                    <th className="w-[22%] border border-ink px-2 py-1.5 text-[10px] font-bold uppercase tracking-wide text-ink">
-                      {right?.label ?? ''}
-                    </th>
-                    <td className="w-[28%] border border-ink px-2 py-1.5 text-sm font-black text-ink">
-                      {right?.value ?? ''}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <div className="mb-2 space-y-1">
+              {ticket.measurements.map((cell) => (
+                <p key={cell.label} className="flex gap-2 text-sm font-medium text-ink">
+                  <span className="min-w-[5.5rem]">{cell.label}</span>
+                  <span>-</span>
+                  <span>{cell.value}</span>
+                </p>
+              ))}
+            </div>
           ) : null}
-          <div className="space-y-1 text-xs font-medium text-ink">
-            {ticket?.customerName ? (
-              <p className="flex justify-between gap-3">
-                <span>Customer</span>
-                <strong>{ticket.customerName}</strong>
-              </p>
-            ) : null}
-            {ticket && ticket.qty > 1 ? (
-              <p className="flex justify-between gap-3">
-                <span>Qty</span>
-                <strong>{ticket.qty}</strong>
-              </p>
-            ) : null}
-            {ticket?.cutterName ? (
-              <p className="flex justify-between gap-3">
-                <span>Cutter</span>
-                <strong>{ticket.cutterName}</strong>
-              </p>
-            ) : null}
-            {ticket?.tailorName ? (
-              <p className="flex justify-between gap-3">
-                <span>Tailor</span>
-                <strong>{ticket.tailorName}</strong>
-              </p>
-            ) : null}
-            {ticket?.deliveryDate ? (
-              <p className="flex justify-between gap-3">
-                <span>Delivery</span>
-                <strong>{ticket.deliveryDate}</strong>
-              </p>
-            ) : null}
-            {ticket?.cutterBy ? (
-              <p className="flex justify-between gap-3">
-                <span>Cutter by</span>
-                <strong>{ticket.cutterBy}</strong>
-              </p>
-            ) : null}
-            {ticket?.tailorBy ? (
-              <p className="flex justify-between gap-3">
-                <span>Tailor by</span>
-                <strong>{ticket.tailorBy}</strong>
-              </p>
-            ) : null}
-          </div>
-          {ticket?.notes ? (
-            <p className="mt-3 border-t border-dashed border-ink/30 pt-3 text-sm font-semibold leading-snug text-ink whitespace-pre-wrap">
-              Note: {ticket.notes}
-            </p>
-          ) : null}
+          <p className="mt-3 text-sm font-medium leading-snug text-ink whitespace-pre-wrap">
+            Note - {ticket?.notes || ''}
+          </p>
           {ticket?.inGroup ? (
             <p className="mt-3 flex items-center gap-2 border-t border-slate-200 pt-3 text-sm font-semibold text-slate-900">
               <Check className="h-4 w-4 shrink-0 stroke-[3]" aria-hidden="true" />

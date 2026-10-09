@@ -146,6 +146,7 @@ export function parseMeasurementChecks(value: unknown): {
   orderCode: string;
   staffJobs: ClothStaffJob[];
   customerPhone: string;
+  packed: boolean;
 } {
   const record = parseJsonRecord<Record<string, unknown>>(value, {});
   return {
@@ -158,6 +159,7 @@ export function parseMeasurementChecks(value: unknown): {
     orderCode: typeof record.orderCode === 'string' ? record.orderCode.trim() : '',
     staffJobs: parseClothStaffJobs(record.staffJobs),
     customerPhone: typeof record.customerPhone === 'string' ? record.customerPhone.trim() : '',
+    packed: Boolean(record.packed),
   };
 }
 
@@ -171,6 +173,7 @@ export function measurementChecksPayload(input: {
   orderCode?: string | null;
   staffJobs?: ClothStaffJob[];
   customerPhone?: string | null;
+  packed?: boolean;
 }): Json {
   return {
     inGroup: input.inGroup,
@@ -182,6 +185,7 @@ export function measurementChecksPayload(input: {
     orderCode: input.orderCode?.trim() || '',
     staffJobs: input.staffJobs ?? [],
     customerPhone: input.customerPhone?.trim() || '',
+    packed: Boolean(input.packed),
   } as unknown as Json;
 }
 

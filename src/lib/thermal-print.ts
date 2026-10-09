@@ -1,5 +1,4 @@
-import { APP_NAME } from './app-config';
-import { PRINT_BARCODE, renderBarcodeCanvas } from './barcode';
+import { PRINT_BARCODE, renderBarcodeCanvas, renderStaffHeaderBannerCanvas } from './barcode';
 import {
   buildEscPosTicket,
   canvasToEscPosRaster,
@@ -28,22 +27,33 @@ export async function printThermalTicket(input: {
   headerLines?: string[];
   lines: string[];
   barcodeValue: string;
+  dateLabel?: string;
+  orderNumber?: string;
   footer?: string;
+  afterBarcodeLines?: string[];
   headerImageUrl?: string;
   copies?: number;
   barcodePlacement?: 'middle' | 'end';
+  bold?: boolean;
 }): Promise<ThermalPrintResult> {
   const api = desktopApi();
   if (!api?.printRaw) {
     return { ok: false, message: 'Thermal print is only available in the Windows app' };
   }
 
-  const canvas = renderBarcodeCanvas(input.barcodeValue, {
-    height: PRINT_BARCODE.height,
-    moduleWidth: PRINT_BARCODE.moduleWidth,
-    maxWidth: PRINT_BARCODE.maxWidth,
-    displayValue: false,
-  });
+  const canvas =
+    input.dateLabel != null || input.orderNumber != null
+      ? renderStaffHeaderBannerCanvas(
+          input.dateLabel ?? '',
+          input.orderNumber ?? '',
+          input.barcodeValue,
+        )
+      : renderBarcodeCanvas(input.barcodeValue, {
+          height: PRINT_BARCODE.height,
+          moduleWidth: PRINT_BARCODE.moduleWidth,
+          maxWidth: PRINT_BARCODE.maxWidth,
+          displayValue: false,
+        });
   const raster = canvasToEscPosRaster(canvas);
   let headerRaster: Uint8Array | undefined;
   if (input.headerImageUrl) {
@@ -59,14 +69,17 @@ export async function printThermalTicket(input: {
   for (let index = 0; index < copyCount; index += 1) {
     payloads.push(
       buildEscPosTicket({
-        title: input.title ?? APP_NAME,
-        headerLines: input.headerLines,
+        title: input.title ?? '',
+        headerLines:
+          input.dateLabel != null || input.orderNumber != null ? [] : input.headerLines,
         lines: input.lines,
         barcodeValue: input.barcodeValue,
         raster,
         headerRaster,
         footer: input.footer,
+        afterBarcodeLines: input.afterBarcodeLines,
         barcodePlacement: input.barcodePlacement,
+        bold: input.bold,
       }),
     );
   }

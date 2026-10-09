@@ -102,6 +102,7 @@ export interface Database {
           tailor_expected_date: string | null;
           expected_date?: string | null;
           order_code?: string;
+          packed?: boolean;
           created_at: string;
           updated_at: string;
           staff_jobs?: Json;
@@ -141,6 +142,7 @@ export interface Database {
           tailor_expected_date?: string | null;
           expected_date?: string | null;
           order_code?: string;
+          packed?: boolean;
           created_at?: string;
           updated_at?: string;
           staff_jobs?: Json;
@@ -180,6 +182,7 @@ export interface Database {
           tailor_expected_date?: string | null;
           expected_date?: string | null;
           order_code?: string;
+          packed?: boolean;
           created_at?: string;
           updated_at?: string;
           staff_jobs?: Json;

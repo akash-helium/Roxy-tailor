@@ -46,6 +46,7 @@ function cloth(partial: Partial<Cloth> & Pick<Cloth, 'id' | 'code' | 'status'>):
     deliveryDate: null,
     cutterExpectedDate: null,
     tailorExpectedDate: null,
+    packed: false,
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
     ...partial,
@@ -75,8 +76,8 @@ const ready = Array.from({ length: 10 }, (_, index) =>
 );
 
 const jacketPair = [
-  cloth({ id: 'j1', code: 'CL-013', garmentType: 'Jacket', garment: 'Jacket', status: 'cutting' }),
-  cloth({ id: 'j2', code: 'CL-013', garmentType: 'Jacket', garment: 'Jacket', status: 'cutting' }),
+  cloth({ id: 'j1', code: 'CL-013', garmentType: 'Jacket', garment: 'Jacket', status: 'cutting', orderBatchId: 'batch-j' }),
+  cloth({ id: 'j2', code: 'CL-013', garmentType: 'Jacket', garment: 'Jacket', status: 'cutting', orderBatchId: 'batch-j' }),
 ];
 
 const tailorPiece = cloth({
@@ -103,6 +104,17 @@ assert(orderHits.length === 10, `OR-007 should expand to 10 pieces, got ${orderH
 
 const qty2 = expandScannedCloths(jacketPair[0]!, [...unassigned, ...jacketPair], 'CL-013');
 assert(qty2.length === 2 && qty2.every((item) => item.code === 'CL-013'), 'qty-2 staff ticket expands both jackets');
+
+const mixedOrder = [
+  cloth({ id: 'k1', code: 'CL-954', garmentType: 'Kurta', garment: 'Kurta', status: 'cutting', orderBatchId: 'batch-mix' }),
+  cloth({ id: 'k2', code: 'CL-954', garmentType: 'Kurta', garment: 'Kurta', status: 'cutting', orderBatchId: 'batch-mix' }),
+  cloth({ id: 'p1', code: 'CL-956', garmentType: 'Pant', garment: 'Pant', status: 'cutting', orderBatchId: 'batch-mix' }),
+  cloth({ id: 'p2', code: 'CL-956', garmentType: 'Pant', garment: 'Pant', status: 'cutting', orderBatchId: 'batch-mix' }),
+];
+const kurtaHits = expandScannedCloths(mixedOrder[0]!, mixedOrder, 'CL-954');
+assert(kurtaHits.length === 2 && kurtaHits.every((item) => item.code === 'CL-954'), 'shared kurta serial expands qty 2 only');
+const pantHits = expandScannedCloths(mixedOrder[2]!, mixedOrder, 'CL-956');
+assert(pantHits.length === 2 && pantHits.every((item) => item.code === 'CL-956'), 'shared pant serial expands qty 2 only');
 
 let basket = applyScanToSession([], unassigned, null);
 assert(basket.next.length === 10, '10 unassigned land in basket');

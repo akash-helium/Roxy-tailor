@@ -1,5 +1,6 @@
 import type { Cloth } from '../types';
 import { summarizePayments } from './payments';
+import { calendarDayFromIso } from './shop-work';
 import { clothBillName, generateOrderCode } from './utils';
 
 /** Groups cloths registered together (same batch, or same customer/date/notes/pay for older rows). */
@@ -22,13 +23,16 @@ function sortOrderCloths(cloths: Cloth[]) {
 }
 
 export function getCustomerOrderCloths(cloth: Cloth, allCloths: Cloth[]): Cloth[] {
-  const sameCode = allCloths.filter((c) => c.code === cloth.code);
-  if (sameCode.length > 1) {
-    return sortOrderCloths(sameCode);
-  }
-
   const key = customerOrderKey(cloth);
-  return sortOrderCloths(allCloths.filter((c) => customerOrderKey(c) === key));
+  const byKey = sortOrderCloths(
+    allCloths.filter((item) => customerOrderKey(item) === key),
+  );
+  if (byKey.length > 1) return byKey;
+
+  const sameCode = sortOrderCloths(
+    allCloths.filter((item) => item.code === cloth.code),
+  );
+  return sameCode.length > 0 ? sameCode : [cloth];
 }
 
 export function getOrderGroupId(cloth: Cloth, allCloths: Cloth[]): string {
@@ -40,18 +44,76 @@ export function orderIsComplete(cloths: Cloth[]) {
   return cloths.length > 0 && cloths.every((item) => item.status === 'completed');
 }
 
-export type OrderBoard = 'all' | 'pending' | 'done' | 'payments';
+export type OrderBoard = 'all' | 'pending' | 'done' | 'payments' | 'packed';
+
+export function orderIsPacked(cloths: Cloth[]) {
+  return cloths.length > 0 && cloths.every((item) => item.packed);
+}
 
 export function orderMatchesBoard(orderCloths: Cloth[], board: OrderBoard) {
   if (board === 'all') return orderCloths.length > 0;
   if (board === 'pending') return !orderIsComplete(orderCloths);
   if (board === 'done') return orderIsComplete(orderCloths);
+  if (board === 'packed') return orderIsPacked(orderCloths);
   return summarizePayments(orderCloths).totalPending > 0;
 }
 
 export function parseOrderBoard(value: string | undefined): OrderBoard | null {
-  if (value === 'all' || value === 'pending' || value === 'done' || value === 'payments') return value;
+  if (
+    value === 'all' ||
+    value === 'pending' ||
+    value === 'done' ||
+    value === 'payments' ||
+    value === 'packed'
+  ) {
+    return value;
+  }
   return null;
+}
+
+/** Order date used on boards: given date, else the day the row was created. */
+export function orderBoardDate(orderCloths: Cloth[]) {
+  const given = orderCloths.map((cloth) => (cloth.givenDate ?? '').trim().slice(0, 10)).find(Boolean);
+  if (given) return given;
+  return calendarDayFromIso(orderCloths[0]?.createdAt);
+}
+
+export function orderDeliveryDate(orderCloths: Cloth[]) {
+  return orderCloths.map((cloth) => (cloth.deliveryDate ?? '').trim().slice(0, 10)).find(Boolean) ?? '';
+}
+
+export function orderMatchesDeliveryDay(orderCloths: Cloth[], day: string) {
+  if (!day) return true;
+  return orderDeliveryDate(orderCloths) === day;
+}
+
+export function orderMatchesDateRange(orderCloths: Cloth[], from: string, to: string) {
+  if (!from && !to) return true;
+  const day = orderBoardDate(orderCloths);
+  if (!day) return false;
+  if (from && day < from) return false;
+  if (to && day > to) return false;
+  return true;
+}
+
+export function formatOrderDateRange(from: string, to: string) {
+  if (!from && !to) return 'All dates';
+  if (from && to && from !== to) {
+    const start = from <= to ? from : to;
+    const end = from <= to ? to : from;
+    return `${formatRangeDay(start)} – ${formatRangeDay(end)}`;
+  }
+  return formatRangeDay(from || to);
+}
+
+function formatRangeDay(value: string) {
+  const [year, month, day] = value.split('-').map(Number);
+  if (!year || !month || !day) return value;
+  return new Date(year, month - 1, day).toLocaleDateString('en-IN', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  });
 }
 
 export function getOrderRepresentatives(cloths: Cloth[], allCloths: Cloth[]): Cloth[] {
@@ -127,6 +189,7 @@ export function summarizeCustomerOrder(cloths: Cloth[]) {
   if (cloths.length === 0) {
     return {
       customerName: 'Customer',
+      customerPhone: '',
       givenDate: null as string | null,
       deliveryDate: null as string | null,
       notes: '',
@@ -150,6 +213,7 @@ export function summarizeCustomerOrder(cloths: Cloth[]) {
     '';
   return {
     customerName: first.customerName || 'Customer',
+    customerPhone: first.customerPhone?.trim() ?? '',
     givenDate: first.givenDate,
     deliveryDate: first.deliveryDate ?? null,
     notes: first.notes?.trim() ?? '',
@@ -163,6 +227,7 @@ export function summarizeCustomerOrder(cloths: Cloth[]) {
 export type CustomerBillItem = {
   name: string;
   quantity: number;
+  codes: string[];
 };
 
 export function groupClothsForCustomerBill(cloths: Cloth[]): CustomerBillItem[] {
@@ -174,9 +239,12 @@ export function groupClothsForCustomerBill(cloths: Cloth[]): CustomerBillItem[] 
     const existing = indexByName.get(name);
     if (existing === undefined) {
       indexByName.set(name, groups.length);
-      groups.push({ name, quantity: 1 });
+      groups.push({ name, quantity: 1, codes: [cloth.code] });
     } else {
       groups[existing]!.quantity += 1;
+      if (!groups[existing]!.codes.includes(cloth.code)) {
+        groups[existing]!.codes.push(cloth.code);
+      }
     }
   }
 
@@ -185,6 +253,15 @@ export function groupClothsForCustomerBill(cloths: Cloth[]): CustomerBillItem[] 
 
 export function customerBillItemLabel(item: CustomerBillItem) {
   return item.quantity > 1 ? `${item.name} x${item.quantity}` : item.name;
+}
+
+/** Slip line: Shirt/2 when qty is more than one, matching Shirt/P on the handwritten bill. */
+export function customerBillSlipName(item: CustomerBillItem) {
+  return item.quantity > 1 ? `${item.name}/${item.quantity}` : item.name;
+}
+
+export function customerBillClothNos(item: CustomerBillItem) {
+  return item.codes.filter(Boolean).join(', ');
 }
 
 function measurementKey(measurements?: Record<string, string>) {

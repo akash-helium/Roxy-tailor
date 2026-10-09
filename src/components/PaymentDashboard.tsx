@@ -1,5 +1,4 @@
-import { formatCurrency, summarizePayments } from '../lib/payments';
-import { clothPendingAmount, clothNetAmount, clothPartPaymentTotal, clothPartPayments } from '../lib/payments';
+import { formatCurrency, summarizePayments, mergeOrderPartPayments } from '../lib/payments';
 import { formatCalendarDate } from '../lib/utils';
 import type { Cloth } from '../types';
 
@@ -30,24 +29,31 @@ export function PaymentDashboard({ cloths }: { cloths: Cloth[] }) {
   );
 }
 
-export function PaymentSummary({ cloth }: { cloth: Cloth }) {
-  const pending = clothPendingAmount(cloth);
-  const net = clothNetAmount(cloth);
-  const hasDiscount = (cloth.discountAmount ?? 0) > 0;
+export function PaymentSummary({ cloth, cloths }: { cloth?: Cloth; cloths?: Cloth[] }) {
+  const list = cloths && cloths.length > 0 ? cloths : cloth ? [cloth] : [];
+  const stats = summarizePayments(list);
+  const pending = stats.totalPending;
+  const net = Math.max(0, stats.totalBill - stats.totalDiscount);
+  const hasDiscount = stats.totalDiscount > 0;
+  const collected = stats.totalAdvance + stats.totalPart + stats.totalFinal;
+  const settled = pending <= 0 && net > 0;
+  const firstAdvanceDate = list.find((item) => item.advanceDate)?.advanceDate ?? null;
+  const firstFinalDate = list.find((item) => item.finalPaymentDate)?.finalPaymentDate ?? null;
+  const mergedParts = mergeOrderPartPayments(list);
 
   return (
     <div className="grid grid-cols-2 gap-x-4 gap-y-4 rounded-[14px] border border-seam bg-white p-4">
       <div>
         <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-muted">Total</p>
         <p className="mt-1 font-display text-xl font-bold tabular text-ink">
-          {formatCurrency(cloth.totalAmount)}
+          {formatCurrency(stats.totalBill)}
         </p>
       </div>
       {hasDiscount && (
         <div>
           <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-muted">Discount</p>
           <p className="mt-1 font-display text-xl font-bold tabular text-overdue">
-            −{formatCurrency(cloth.discountAmount)}
+            −{formatCurrency(stats.totalDiscount)}
           </p>
         </div>
       )}
@@ -60,36 +66,43 @@ export function PaymentSummary({ cloth }: { cloth: Cloth }) {
       <div>
         <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-muted">Advance</p>
         <p className="mt-1 font-display text-xl font-bold tabular text-done">
-          {formatCurrency(cloth.advanceAmount)}
+          {formatCurrency(stats.totalAdvance)}
         </p>
-        {cloth.advanceDate ? (
-          <p className="mt-0.5 text-[11px] text-ink-muted">{formatCalendarDate(cloth.advanceDate)}</p>
+        {firstAdvanceDate ? (
+          <p className="mt-0.5 text-[11px] text-ink-muted">{formatCalendarDate(firstAdvanceDate)}</p>
         ) : null}
       </div>
-      {clothPartPaymentTotal(cloth) > 0 && (
+      {stats.totalPart > 0 && (
         <div>
           <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-muted">Part Paid</p>
           <p className="mt-1 font-display text-xl font-bold tabular text-done">
-            {formatCurrency(clothPartPaymentTotal(cloth))}
+            {formatCurrency(stats.totalPart)}
           </p>
           <p className="mt-0.5 text-[11px] text-ink-muted">
-            {clothPartPayments(cloth)
+            {mergedParts
               .map((item) => `${formatCurrency(item.amount)}${item.date ? ` · ${formatCalendarDate(item.date)}` : ''}`)
               .join(', ')}
           </p>
         </div>
       )}
       <div>
-        <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-muted">Pending</p>
-        <p className="mt-1 font-display text-xl font-bold tabular text-cut">{formatCurrency(pending)}</p>
+        <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-muted">
+          {settled ? 'Settled' : 'Pending'}
+        </p>
+        <p className={`mt-1 font-display text-xl font-bold tabular ${settled ? 'text-done' : 'text-cut'}`}>
+          {formatCurrency(pending)}
+        </p>
+        {settled ? (
+          <p className="mt-0.5 text-[11px] text-ink-muted">All payment collected ({formatCurrency(collected)})</p>
+        ) : null}
       </div>
       <div>
         <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-muted">Final Paid</p>
         <p className="mt-1 font-display text-xl font-bold tabular text-sew">
-          {formatCurrency(cloth.finalPaymentAmount)}
+          {formatCurrency(stats.totalFinal)}
         </p>
-        {cloth.finalPaymentDate ? (
-          <p className="mt-0.5 text-[11px] text-ink-muted">{formatCalendarDate(cloth.finalPaymentDate)}</p>
+        {firstFinalDate ? (
+          <p className="mt-0.5 text-[11px] text-ink-muted">{formatCalendarDate(firstFinalDate)}</p>
         ) : null}
       </div>
     </div>
